@@ -288,3 +288,10 @@ Run `python3 autotune.py start --help` for the full list, and
   lot of power and still cost too much hashrate. Look at the per-level table in
   `summary.txt` and pick using your electricity price, or set `--min-hr-frac`.
 - Expect a few crashes. Finding where the card fails is part of the search.
+
+---
+
+## License
+
+[MIT](LICENSE) © 2026 d57heinz. Free to use, modify and share. Provided as is,
+without warranty. Tuning, crashing and power-cycling GPUs is at your own risk.
