@@ -1094,6 +1094,18 @@ def cmd_start(a):
         sys.exit("Use --gpu N or --bus 0000xxxx:yy:00.0 (or run in a terminal for prompts).")
     log(f"Selected GPU {gpu.index}: {gpu.name} at {gpu.bus}")
 
+    # an apply service from an earlier run would keep re-applying old settings and
+    # fight this run - stop it (re-install it with `install-apply` when this run ends)
+    au = apply_unit(gpu.bus)
+    r = sh(["systemctl", "is-enabled", au], timeout=15) if shutil.which("systemctl") else None
+    if r and (r.stdout or "").strip() in ("enabled", "static", "indirect"):
+        log(f"{au} is re-applying earlier settings to this card.")
+        if interactive and not yes("Stop and disable it for this run?"):
+            sys.exit("Cancelled - the apply service would fight the tuning run.")
+        systemctl("stop", au)
+        systemctl("disable", au)
+        log(f"Stopped {au}. Run `install-apply` again after this run to keep the new result.")
+
     cmp = "CMP" in gpu.name.upper()
     try:
         cmp_cards = {g.bus: g.mem_total_mib() for g in list_gpus()

@@ -196,6 +196,15 @@ To stop early (restores the starting offset and power limit):
 python3 autotune.py stop
 ```
 
+To re-tune a card later (e.g. with a different power-limit range), stop the card's
+apply service first so it doesn't keep re-applying the old result. `start` offers
+to do this for you:
+```bash
+python3 autotune.py uninstall                      # this folder's tuning + apply services
+# or by name:  systemctl disable --now gpu-autotune-apply-<slot>
+systemctl list-units 'gpu-autotune*' --all --no-pager   # list them
+```
+
 ---
 
 ## Using the result
