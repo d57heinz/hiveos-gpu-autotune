@@ -1,0 +1,14 @@
+# per-run files written next to the script
+state.json
+state.json.tmp
+best.json
+best.json.old
+results.csv
+results.csv.old
+results-*.csv
+summary.txt
+autotune.log
+crash-*.txt
+report-*.txt
+status-*.txt
+__pycache__/
