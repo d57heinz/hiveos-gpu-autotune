@@ -40,6 +40,9 @@ Requires: root, python3, `pip3 install nvidia-ml-py`.
 Commands
   probe                     show what the miner API / logs report
   start  [options]          guided setup, then tuning runs in the background
+  start --all               tune every card in turn, each in its own folder
+                            (../autotune-<slot>/), so results never overlap
+  queue [--resume]          show the --all queue and each card's best result
   status                    every test so far + the current level
   report                    best result per power level + every test (summary.txt)
   stop                      stop tuning, restore starting offset and power limit
@@ -55,6 +58,7 @@ import json
 import os
 import re
 import shutil
+import shlex
 import subprocess
 import sys
 import time
@@ -75,6 +79,20 @@ CSV_FILE = os.path.join(BASE, "results.csv")
 LOG = os.path.join(BASE, "autotune.log")
 UNIT_DIR = "/etc/systemd/system"
 LEGACY_UNITS = ("gpu-autotune.service", "gpu-autotune-apply.service")
+
+
+QUEUE = os.path.join(BASE, "queue.json")
+
+# Highest core offset worth testing per model (used when --offset-max is not given).
+# RTX 3090: gains past +300 are too small to justify the instability.
+MODEL_OFFSET_MAX = {"RTX 3090": 300}
+
+
+def model_offset_max(name):
+    for key, val in MODEL_OFFSET_MAX.items():
+        if key.upper() in name.upper():
+            return val
+    return None
 
 
 def _slug(bus):
@@ -829,6 +847,7 @@ def abort(st, cfg, why):
     except Exception:  # noqa: BLE001
         pass
     systemctl("disable", run_unit(cfg["bus"]))
+    queue_advance(cfg, f"aborted: {why}")
 
 
 # ---------------------------------------------------------------- finish
@@ -950,6 +969,201 @@ def finish(st, cfg, gpu=None, miner=None):
             f"--cclk {best['cap']}).")
     log(f"Saved to {BEST}; full table in {SUMMARY}. Best settings are applied now.")
     log("=" * 70)
+    queue_advance(cfg, "finished")
+
+
+# ---------------------------------------------------------------- queue (start --all)
+def load_queue(path):
+    with open(path) as f:
+        return json.load(f)
+
+
+def save_queue(path, q):
+    tmp = path + ".tmp"
+    with open(tmp, "w") as f:
+        json.dump(q, f, indent=2)
+        f.flush()
+        os.fsync(f.fileno())
+    os.replace(tmp, path)
+
+
+def _now():
+    return datetime.datetime.now().isoformat(timespec="seconds")
+
+
+def queue_launch_next(qpath):
+    """Start the next pending card of a queue in its own folder. Returns True if one started."""
+    q = load_queue(qpath)
+    while True:
+        nxt = next((c for c in q["cards"] if c["status"] == "pending"), None)
+        if nxt is None:
+            log("QUEUE: no cards left - all done. See `autotune.py queue` for the results.")
+            return False
+        os.makedirs(nxt["dir"], exist_ok=True)
+        dst = os.path.join(nxt["dir"], "autotune.py")
+        if os.path.abspath(dst) != SCRIPT:
+            shutil.copy2(SCRIPT, dst)
+        nxt["status"], nxt["started"] = "running", _now()
+        save_queue(qpath, q)
+        log(f"QUEUE: starting {nxt['name']} at {nxt['bus']} in {nxt['dir']}")
+        cmd = [sys.executable, dst, "start", "--bus", nxt["bus"], "--queue", qpath,
+               "--force"] + q["args"]
+        try:
+            res = subprocess.run(cmd, stdin=subprocess.DEVNULL, capture_output=True,
+                                 text=True, timeout=900)
+            ok, out = res.returncode == 0, (res.stdout + res.stderr).strip()
+        except Exception as e:  # noqa: BLE001
+            ok, out = False, str(e)
+        if ok:
+            return True
+        nxt["status"] = "failed to start"
+        nxt["note"] = out.splitlines()[-1] if out else ""
+        save_queue(qpath, q)
+        log(f"QUEUE: could not start {nxt['bus']}: {nxt['note']} - moving on")
+
+
+def queue_advance(cfg, outcome):
+    """Called when a queued card's run ends: record it, keep its result applied, start the next."""
+    qpath = cfg.get("queue")
+    if not qpath or not os.path.exists(qpath):
+        return
+    try:
+        q = load_queue(qpath)
+        for c in q["cards"]:
+            if c["bus"] == cfg["bus"] and c["status"] == "running":
+                c["status"], c["ended"] = outcome, _now()
+        save_queue(qpath, q)
+        if outcome == "finished" and q.get("auto_apply") and os.path.exists(BEST):
+            try:
+                cmd_install_apply(None)
+            except BaseException as e:  # noqa: BLE001
+                log(f"QUEUE: could not install the apply service: {e}")
+        queue_launch_next(qpath)
+    except Exception as e:  # noqa: BLE001
+        log(f"QUEUE: error while moving to the next card: {e}")
+
+
+QUEUE_PASS = [("offset_start", "--offset-start"), ("offset_max", "--offset-max"),
+              ("offset_step", "--offset-step"), ("margin", "--margin"),
+              ("cap_step", "--cap-step"), ("cap_min", "--cap-min"),
+              ("min_hr_frac", "--min-hr-frac"), ("patience", "--patience"),
+              ("crash_retries", "--crash-retries"), ("first_warmup", "--first-warmup"),
+              ("warmup", "--warmup"), ("sample", "--sample"), ("tick", "--tick"),
+              ("dead_secs", "--dead-secs"), ("max_rejects", "--max-rejects"),
+              ("max_reboots", "--max-reboots"), ("pl_min", "--pl-min"), ("pl_max", "--pl-max"),
+              ("pl_step", "--pl-step"), ("power_cycle", "--power-cycle"),
+              ("wake_secs", "--wake-secs"), ("api_url", "--api-url")]
+QUEUE_FLAGS = [("no_pl_sweep", "--no-pl-sweep"),
+               ("pl_full_offset_search", "--pl-full-offset-search")]
+
+
+def cmd_start_all(a):
+    """Tune several cards one after another, each in its own folder."""
+    if os.path.exists(QUEUE):
+        busy = [c for c in load_queue(QUEUE)["cards"] if c["status"] == "running"]
+        if busy:
+            sys.exit(f"A queue is already running ({busy[0]['bus']}). See `autotune.py queue`; "
+                     f"stop the active card with `stop` in {busy[0]['dir']}.")
+    interactive = sys.stdin.isatty()
+    gpus = list_gpus()
+    print("\nGPUs in this rig:")
+    for g in gpus:
+        mx = model_offset_max(g.name)
+        print(f"  [{g.index}]  {g.name:32s} slot {g.bus}  {g.mem_total_mib():6d} MiB"
+              + (f"  (offset capped at +{mx})" if mx and a.offset_max is None else ""))
+    pick = a.cards
+    if pick is None and interactive:
+        pick = ask("Cards to tune, in order (e.g. 0,1,2 - Enter = all)", "all")
+    if pick in (None, "", "all"):
+        chosen = gpus
+    else:
+        try:
+            idx = [int(x) for x in pick.replace(" ", "").split(",") if x != ""]
+            chosen = [next(g for g in gpus if g.index == i) for i in idx]
+        except (ValueError, StopIteration):
+            sys.exit(f"Could not understand the card list: {pick!r}")
+    if not chosen:
+        sys.exit("No cards selected.")
+
+    if interactive:
+        if not a.no_pl_sweep:
+            if a.pl_min is None:
+                v = ask("Lowest power limit to test, W (Enter = each card's minimum)", "")
+                a.pl_min = float(v) if v else None
+            if a.pl_max is None:
+                v = ask("Highest power limit to test, W (Enter = each card's maximum)", "")
+                a.pl_max = float(v) if v else None
+        if a.offset_start is None:
+            a.offset_start = ask("Starting core offset for every card", 0, int)
+        if a.min_hr_frac == 0.0:
+            a.min_hr_frac = ask("Lowest hashrate you'd accept, as % of the uncapped result "
+                                "(0 = no limit)", 0, int) / 100.0
+        if not a.no_auto_apply:
+            a.no_auto_apply = not yes("Keep each card's result applied (install its apply "
+                                      "service) as soon as it finishes?")
+    args = []
+    for attr, flag in QUEUE_PASS:
+        v = getattr(a, attr)
+        if v is not None:
+            args += [flag, str(v)]
+    for attr, flag in QUEUE_FLAGS:
+        if getattr(a, attr):
+            args.append(flag)
+
+    parent = os.path.dirname(BASE)
+    cards = [{"bus": g.bus, "name": g.name, "status": "pending",
+              "dir": os.path.join(parent, f"autotune-{_slug(g.bus)}")} for g in chosen]
+    print("\nQueue (one card at a time, each in its own folder):")
+    for i, c in enumerate(cards, 1):
+        print(f"  {i}. {c['name']:28s} {c['bus']}  ->  {c['dir']}")
+    print(f"Options for every card: {' '.join(shlex.quote(x) for x in args) or '(defaults)'}")
+    if interactive and not yes("Start the queue now?"):
+        sys.exit("Cancelled.")
+    save_queue(QUEUE, {"created": _now(), "auto_apply": not a.no_auto_apply,
+                       "args": args, "cards": cards})
+    log(f"QUEUE: {len(cards)} card(s) queued in {QUEUE}")
+    if queue_launch_next(QUEUE):
+        first = next(c for c in load_queue(QUEUE)["cards"] if c["status"] == "running")
+        print(f"\nStarted. Check the whole queue with:   python3 {SCRIPT} queue\n"
+              f"Follow the active card with:           tail -f {first['dir']}/autotune.log")
+
+
+def find_queue():
+    if os.path.exists(QUEUE):
+        return QUEUE
+    st = load_state()
+    qp = st and st["cfg"].get("queue")
+    return qp if qp and os.path.exists(qp) else None
+
+
+def cmd_queue(a):
+    qpath = find_queue()
+    if not qpath:
+        sys.exit("No queue found here. Start one with `autotune.py start --all`.")
+    q = load_queue(qpath)
+    print(f"Queue {qpath} (created {q.get('created')}, auto-apply "
+          f"{'on' if q.get('auto_apply') else 'off'})")
+    for c in q["cards"]:
+        line = f"  {c['status']:16s} {c['name']:28s} {c['bus']}  {c['dir']}"
+        bf = os.path.join(c["dir"], "best.json")
+        if c["status"] == "finished" and os.path.exists(bf):
+            b = json.load(open(bf))
+            line += (f"\n{'':19s}best: " + (f"PL {b['power_limit_w']:g} W, "
+                                            if b.get("power_limit_w") else "")
+                     + f"offset {b['core_offset']:+d}"
+                     + (f", cap {b['clock_cap_mhz']} MHz" if b.get("clock_cap_mhz") else "")
+                     + f" -> {fmt_hr(b['hashrate'])} @ {b['power_w']} W = {fmt_eff(b['eff'])}")
+        elif c.get("note"):
+            line += f"\n{'':19s}{c['note']}"
+        print(line)
+    active = next((c for c in q["cards"] if c["status"] == "running"), None)
+    if active:
+        print(f"Active card log:  tail -f {active['dir']}/autotune.log")
+    elif a.resume:
+        queue_launch_next(qpath)
+    elif any(c["status"] == "pending" for c in q["cards"]):
+        print("Nothing is running. Continue with the pending cards:  "
+              f"python3 {SCRIPT} queue --resume")
 
 
 # ---------------------------------------------------------------- commands
@@ -1115,6 +1329,8 @@ def auto_map_api(api_url, gpu):
 def cmd_start(a):
     if os.geteuid() != 0:
         sys.exit("Run as root.")
+    if a.all or a.cards:
+        return cmd_start_all(a)
     st = load_state()
     if st and st.get("phase") not in (None, "done"):
         sys.exit("A run is already active. Use `status`, or `stop` first.")
@@ -1154,15 +1370,24 @@ def cmd_start(a):
 
     # an apply service from an earlier run would keep re-applying old settings and
     # fight this run - stop it (re-install it with `install-apply` when this run ends)
-    au = apply_unit(gpu.bus)
-    r = sh(["systemctl", "is-enabled", au], timeout=15) if shutil.which("systemctl") else None
-    if r and (r.stdout or "").strip() in ("enabled", "static", "indirect"):
-        log(f"{au} is re-applying earlier settings to this card.")
-        if interactive and not yes("Stop and disable it for this run?"):
-            sys.exit("Cancelled - the apply service would fight the tuning run.")
-        systemctl("stop", au)
-        systemctl("disable", au)
-        log(f"Stopped {au}. Run `install-apply` again after this run to keep the new result.")
+    units = [apply_unit(gpu.bus)]
+    for old in LEGACY_UNITS:          # services installed by early versions (no slot in the name)
+        try:
+            m = re.search(r"ExecStart=\S+ (\S+) apply", open(os.path.join(UNIT_DIR, old)).read())
+            bj = os.path.join(os.path.dirname(m.group(1)), "best.json")
+            if json.load(open(bj)).get("gpu_bus") == gpu.bus:
+                units.append(old)
+        except (OSError, ValueError, AttributeError):
+            pass
+    for au in units:
+        r = sh(["systemctl", "is-enabled", au], timeout=15) if shutil.which("systemctl") else None
+        if r and (r.stdout or "").strip() in ("enabled", "static", "indirect"):
+            log(f"{au} is re-applying earlier settings to this card.")
+            if interactive and not yes("Stop and disable it for this run?"):
+                sys.exit("Cancelled - the apply service would fight the tuning run.")
+            systemctl("stop", au)
+            systemctl("disable", au)
+            log(f"Stopped {au}. Run `install-apply` again after this run to keep the new result.")
 
     cmp = "CMP" in gpu.name.upper()
     try:
@@ -1274,9 +1499,19 @@ def cmd_start(a):
         pct = ask("Lowest hashrate you'd accept, as % of the uncapped result "
                   "(0 = no limit, pure max efficiency)", 0, int)
         a.min_hr_frac = pct / 100.0
-    offset_max = a.offset_max if a.offset_max is not None else (rng[1] if rng else 1000)
+    model_max = model_offset_max(gpu.name)
+    if a.offset_max is not None:
+        offset_max = a.offset_max
+    elif model_max is not None:
+        offset_max = model_max
+        log(f"{gpu.name}: core offset capped at +{model_max} (model default; "
+            f"override with --offset-max)")
+    else:
+        offset_max = rng[1] if rng else 1000
     if rng:
         offset_max = min(offset_max, rng[1])
+    if a.offset_start > offset_max:
+        sys.exit(f"Starting offset {a.offset_start:+d} is above the maximum {offset_max:+d}.")
 
     cfg = {k: getattr(a, k) for k in (
         "source", "api_url", "hr_path", "acc_path", "rej_path", "hw_path", "volt_path",
@@ -1286,7 +1521,7 @@ def cmd_start(a):
         "patience", "crash_retries")}
     cfg.update(pl_levels=levels, pl_original=pl_now, pl_reuse_offset=not a.pl_full_offset_search,
                first_warmup=a.first_warmup)
-    cfg.update(cmp_cards=cmp_cards)
+    cfg.update(cmp_cards=cmp_cards, queue=a.queue)
     cfg.update(offset_max=offset_max, bus=gpu.bus, gpu=gpu.index, cmp=cmp, clocks=clocks,
                mem_total=gpu.mem_total_mib() if cmp else None)
 
@@ -1370,6 +1605,16 @@ def cmd_report(_a):
 
 def cmd_stop(_a):
     st = load_state()
+    qp = st and st["cfg"].get("queue")
+    if qp and os.path.exists(qp):
+        q = load_queue(qp)
+        for c in q["cards"]:
+            if c["bus"] == st["cfg"]["bus"] and c["status"] == "running":
+                c["status"], c["ended"] = "stopped", _now()
+        save_queue(qp, q)
+        if any(c["status"] == "pending" for c in q["cards"]):
+            print("This card was part of a queue. The remaining cards are NOT started; "
+                  "continue them with `autotune.py queue --resume`.")
     if st:
         systemctl("stop", run_unit(st["cfg"]["bus"]))
         systemctl("disable", run_unit(st["cfg"]["bus"]))
@@ -1518,6 +1763,12 @@ def main():
     s = sub.add_parser("start", help="start a tuning run")
     s.add_argument("--gpu", type=int, help="nvidia-smi index of the card (prompted if omitted)")
     s.add_argument("--bus", help="PCI slot of the card, e.g. 00000000:05:00.0")
+    s.add_argument("--all", action="store_true",
+                   help="tune every card one after another, each in its own folder")
+    s.add_argument("--cards", help="like --all but only these GPU numbers, in order (e.g. 0,2,1)")
+    s.add_argument("--no-auto-apply", action="store_true",
+                   help="with --all: don't install each card's apply service when it finishes")
+    s.add_argument("--queue", help=argparse.SUPPRESS)
     s.add_argument("--source", choices=["api", "log"], default="api")
     s.add_argument("--api-url", default="http://127.0.0.1:63005")
     s.add_argument("--hr-path", help="JSON path of this GPU's hashrate (from probe)")
@@ -1528,7 +1779,8 @@ def main():
     s.add_argument("--log-file", help="miner log file (for --source log)")
     s.add_argument("--miner-gpu", type=int, help="GPU number as the miner shows it")
     s.add_argument("--offset-start", type=int, help="default 0 (prompted)")
-    s.add_argument("--offset-max", type=int, help="default: driver maximum")
+    s.add_argument("--offset-max", type=int,
+                   help="default: driver maximum (RTX 3090: 300)")
     s.add_argument("--offset-step", type=int, default=15)
     s.add_argument("--margin", type=int, default=30, help="MHz to stay below the lowest offset that kept crashing")
     s.add_argument("--cap-step", type=int, default=0,
@@ -1567,6 +1819,8 @@ def main():
     sub.add_parser("status", help="show results")
     sub.add_parser("report", help="print the summary table (also saved to summary.txt)")
     sub.add_parser("stop", help="stop and restore starting settings")
+    qu = sub.add_parser("queue", help="show the `start --all` queue and each card's result")
+    qu.add_argument("--resume", action="store_true", help="start the next pending card")
     ap = sub.add_parser("apply", help="apply best.json")
     ap.add_argument("--watch", action="store_true")
     ap.add_argument("--delay", type=int, default=0)
@@ -1575,7 +1829,7 @@ def main():
 
     a = p.parse_args()
     {"probe": cmd_probe, "start": cmd_start, "run": cmd_run, "status": cmd_status,
-     "report": cmd_report,
+     "report": cmd_report, "queue": cmd_queue,
      "stop": cmd_stop, "apply": cmd_apply, "install-apply": cmd_install_apply,
      "uninstall": cmd_uninstall}[a.cmd](a)
 

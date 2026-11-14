@@ -155,6 +155,37 @@ The guided setup:
 The tuning then runs in the background as a systemd service. You can close the
 terminal.
 
+### Tune every card in one go
+
+```bash
+cd /home/user/autotune
+python3 autotune.py start --all          # or: --cards 0,2,1 for some cards, in that order
+```
+It asks the questions once (power-limit range, starting offset, lowest acceptable
+hashrate), then tunes the cards **one after another**. Each card gets its own folder
+next to the one you started from, named after its PCI slot:
+
+```
+/home/user/autotune/            <- where you ran it (holds queue.json)
+/home/user/autotune-01-00-0/    <- GPU at 00000000:01:00.0: its state, log, best.json
+/home/user/autotune-02-00-0/
+...
+```
+so no card's `best.json` can overwrite another's. When a card finishes, its apply
+service is installed (unless you pass `--no-auto-apply`) so it keeps its result
+while the next card is tuned, and the next card starts by itself. The queue
+survives reboots and power cycles.
+
+```bash
+python3 autotune.py queue             # every card's status and best result
+python3 autotune.py queue --resume    # continue with pending cards after a `stop`
+```
+To stop, run `python3 autotune.py stop` in the **active card's** folder (shown by
+`queue`). The remaining cards stay pending until you `--resume`.
+
+Apply services set the offset and clock cap, not the power limit: enter each card's
+power limit from `queue` in HiveOS.
+
 ---
 
 ## Checking on it
@@ -251,7 +282,10 @@ limit is different. Back the offset off by about 30 MHz on a different card.
 | Option | Default | What it does |
 |---|---|---|
 | `--gpu N` / `--bus 0000xxxx:yy:00.0` | prompt | Choose the card without the prompt |
+| `--all` / `--cards 0,2,1` | off | Tune every card (or the listed ones) in turn, each in its own folder |
+| `--no-auto-apply` | off | With `--all`: don't install each card's apply service when it finishes |
 | `--offset-start N` | 0 | First offset to test |
+| `--offset-max N` | driver max (RTX 3090: 300) | Highest offset to test. Some models have a built-in limit where more offset isn't worth the instability |
 | `--offset-step N` | 15 | MHz per offset step |
 | `--margin N` | 30 | MHz to stay below the lowest offset that kept crashing |
 | `--cap-step N` | auto (~1%) | MHz per clock-cap step |
