@@ -1138,6 +1138,20 @@ def cmd_start(a):
         sys.exit("Use --gpu N or --bus 0000xxxx:yy:00.0 (or run in a terminal for prompts).")
     log(f"Selected GPU {gpu.index}: {gpu.name} at {gpu.bus}")
 
+    # one folder per card: this folder's best.json may be another card's saved result
+    # (and its apply service reads it from here) - a new run would rename it away
+    if os.path.exists(BEST):
+        try:
+            other = json.load(open(BEST)).get("gpu_bus")
+        except (OSError, ValueError):
+            other = None
+        if other and other != gpu.bus:
+            sys.exit(f"This folder holds the tuning result for the card at {other} "
+                     f"({BEST}), which its apply service may be using. Tune {gpu.bus} from "
+                     f"its own folder, e.g.:\n  mkdir -p {os.path.dirname(BASE)}/autotune-"
+                     f"{_slug(gpu.bus)} && cp {SCRIPT} {os.path.dirname(BASE)}/autotune-"
+                     f"{_slug(gpu.bus)}/")
+
     # an apply service from an earlier run would keep re-applying old settings and
     # fight this run - stop it (re-install it with `install-apply` when this run ends)
     au = apply_unit(gpu.bus)
