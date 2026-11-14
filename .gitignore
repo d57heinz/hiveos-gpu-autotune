@@ -12,3 +12,4 @@ crash-*.txt
 report-*.txt
 status-*.txt
 __pycache__/
+.miner-cmd.out

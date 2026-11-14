@@ -69,6 +69,31 @@ import urllib.request
 # pause it for power-limit changes, or power-cycle the rig.
 _TOOL_DIRS = ["/hive/bin", "/hive/sbin", "/usr/local/sbin", "/usr/local/bin",
               "/usr/sbin", "/usr/bin", "/sbin", "/bin"]
+
+
+def load_env_file(path="/etc/environment"):
+    """HiveOS keeps the variables its tools need (WALLET_CONF, RIG_CONF, ...) in
+    /etc/environment. Login shells get them; a systemd service does not, and then
+    `miner start` finds no flight sheet ("No miner is set"). Load them ourselves."""
+    try:
+        lines = open(path).read().splitlines()
+    except OSError:
+        return
+    for line in lines:
+        line = line.strip()
+        if line.startswith("export "):
+            line = line[7:].strip()
+        if not line or line.startswith("#") or "=" not in line:
+            continue
+        key, val = line.split("=", 1)
+        key, val = key.strip(), val.strip()
+        if len(val) >= 2 and val[0] == val[-1] and val[0] in "\"'":
+            val = val[1:-1]
+        if key and key != "PATH" and key not in os.environ:
+            os.environ[key] = val
+
+
+load_env_file()
 _path = [d for d in os.environ.get("PATH", "").split(":") if d]
 os.environ["PATH"] = ":".join(_path + [d for d in _TOOL_DIRS if d not in _path])
 
@@ -144,6 +169,36 @@ def sh(cmd, timeout=60):
     except Exception as e:  # noqa: BLE001
         log(f"command failed {cmd}: {e}")
         return None
+
+
+def hive_miner(action, timeout=120):
+    """Run HiveOS `miner stop|start|restart` from the background service.
+    Output goes to a file, not a pipe: `miner start` leaves a screen daemon running that
+    would keep a pipe open and block us. HOME/TERM are set because a systemd service has
+    neither and screen wants them. The result is logged so a failure is visible."""
+    env = dict(os.environ)
+    env.setdefault("HOME", "/root")
+    env.setdefault("USER", "root")
+    env.setdefault("TERM", "xterm")
+    out_path = os.path.join(BASE, ".miner-cmd.out")
+    rc, note = None, ""
+    try:
+        with open(out_path, "w") as out:
+            rc = subprocess.run(["miner", action], stdin=subprocess.DEVNULL, stdout=out,
+                                stderr=subprocess.STDOUT, timeout=timeout, env=env,
+                                start_new_session=True).returncode
+    except subprocess.TimeoutExpired:
+        note = f"did not return within {timeout}s"
+    except Exception as e:  # noqa: BLE001
+        note = str(e)
+    try:
+        lines = [l.strip() for l in open(out_path, errors="replace").read().splitlines()
+                 if l.strip()]
+        text = re.sub(r"\x1b\[[0-9;]*m", "", " | ".join(lines[-3:]))
+    except OSError:
+        text = ""
+    log(f"  miner {action}: " + (note or f"exit {rc}") + (f" - {text}" if text else ""))
+    return rc == 0
 
 
 def systemctl(*a):
@@ -413,16 +468,20 @@ def set_pl_paused(gpu, miner, st, watts):
         raise RuntimeError("HiveOS `miner` command not found - refusing to change the power "
                            "limit while the miner is running")
     log(f"POWER LIMIT -> {watts:g} W (pausing the miner while it changes)")
-    sh(["miner", "stop"], timeout=120)
+    hive_miner("stop")
     time.sleep(10)
     gpu.set_pl(watts)
     time.sleep(3)
     log(f"  power limit is now {gpu.get_pl():g} W")
-    sh(["miner", "start"], timeout=120)
+    hive_miner("start")
     st["applied_pl"] = watts
     st["fresh"] = True
     save_state(st)
-    return wait_hashing(miner, 300)
+    if wait_hashing(miner, 150):
+        return True
+    log("  miner is not hashing 150 s after `miner start` - trying `miner restart`")
+    hive_miner("restart")
+    return wait_hashing(miner, 240)
 
 
 # ---------------------------------------------------------------- one test
@@ -744,7 +803,7 @@ def recover(gpu, miner, st, cfg):
     except Exception as e:  # noqa: BLE001
         log(f"  could not reset GPU ({e})")
     if shutil.which("miner"):
-        sh(["miner", "restart"], timeout=120)
+        hive_miner("restart")
     else:
         log("  HiveOS `miner` command not found - cannot restart the miner")
     if wait_hashing(miner, 240):
@@ -1675,10 +1734,13 @@ Wants=network-online.target
 
 [Service]
 Type={kind}
+EnvironmentFile=-/etc/environment
 Environment=PATH=/hive/bin:/hive/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart={cmd} --delay {delay}
 TimeoutStartSec=infinity
 Restart=no
+# the miner (re)started by this service must survive when the service stops or finishes
+KillMode=process
 
 [Install]
 WantedBy=multi-user.target
