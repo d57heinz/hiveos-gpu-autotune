@@ -143,7 +143,7 @@ The guided setup:
 
 | Prompt | What to enter |
 |---|---|
-| Which GPU | The number next to the card (the list shows name, PCI slot, memory and current offset) |
+| Which GPU(s) | One card's number, several in order (`0,1,2`), or `all`. More than one card starts a queue, each card in its own folder (see below) |
 | Continue with this CMP card | `y` (CMP cards only) |
 | Lowest / highest power limit | The range to sweep, e.g. `180` and `260` (Enter = the card's own limits) |
 | Use these (miner mapping) | Enter, if it found the card in the miner API |

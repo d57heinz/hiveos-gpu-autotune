@@ -1347,9 +1347,17 @@ def cmd_start(a):
         for g in gpus:
             print(f"  [{g.index}]  {g.name:32s} slot {g.bus}  {g.mem_total_mib():6d} MiB  "
                   f"offset {g.get_offset():+d}")
-        idx = ask("Which GPU do you want to tune? (number in brackets)",
-                  cast=int, valid=[g.index for g in gpus])
-        gpu = GPU(index=idx)
+        valid = [g.index for g in gpus]
+        while True:
+            pick = ask("Which GPU(s) do you want to tune? One number, several in order "
+                       "(e.g. 0,1,2), or 'all'").replace(" ", "").lower()
+            if pick == "all" or "," in pick:
+                a.cards = pick                 # several cards: one after another, own folders
+                return cmd_start_all(a)
+            if pick.isdigit() and int(pick) in valid:
+                break
+            print(f"  choose from: {', '.join(map(str, valid))}, a list like 0,1,2, or all")
+        gpu = GPU(index=int(pick))
     else:
         sys.exit("Use --gpu N or --bus 0000xxxx:yy:00.0 (or run in a terminal for prompts).")
     log(f"Selected GPU {gpu.index}: {gpu.name} at {gpu.bus}")
