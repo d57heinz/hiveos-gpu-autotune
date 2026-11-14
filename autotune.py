@@ -60,6 +60,14 @@ import sys
 import time
 import urllib.request
 
+# systemd services get a minimal PATH without /hive/bin, where HiveOS keeps `miner`
+# and `sreboot`. Without this the background service could not restart the miner,
+# pause it for power-limit changes, or power-cycle the rig.
+_TOOL_DIRS = ["/hive/bin", "/hive/sbin", "/usr/local/sbin", "/usr/local/bin",
+              "/usr/sbin", "/usr/bin", "/sbin", "/bin"]
+_path = [d for d in os.environ.get("PATH", "").split(":") if d]
+os.environ["PATH"] = ":".join(_path + [d for d in _TOOL_DIRS if d not in _path])
+
 BASE = os.path.dirname(os.path.abspath(__file__))
 STATE = os.path.join(BASE, "state.json")
 BEST = os.path.join(BASE, "best.json")
@@ -383,15 +391,16 @@ def cur_pl(st, cfg=None):
 def set_pl_paused(gpu, miner, st, watts):
     """Change the power limit with the miner STOPPED. A live PL change under load
     triggered an Xid 62 (PMU halt) on a 5070 Ti, so never do it while hashing."""
+    if not shutil.which("miner"):
+        raise RuntimeError("HiveOS `miner` command not found - refusing to change the power "
+                           "limit while the miner is running")
     log(f"POWER LIMIT -> {watts:g} W (pausing the miner while it changes)")
-    if shutil.which("miner"):
-        sh(["miner", "stop"], timeout=120)
-        time.sleep(10)
+    sh(["miner", "stop"], timeout=120)
+    time.sleep(10)
     gpu.set_pl(watts)
     time.sleep(3)
     log(f"  power limit is now {gpu.get_pl():g} W")
-    if shutil.which("miner"):
-        sh(["miner", "start"], timeout=120)
+    sh(["miner", "start"], timeout=120)
     st["applied_pl"] = watts
     st["fresh"] = True
     save_state(st)
@@ -718,10 +727,36 @@ def recover(gpu, miner, st, cfg):
         log(f"  could not reset GPU ({e})")
     if shutil.which("miner"):
         sh(["miner", "restart"], timeout=120)
+    else:
+        log("  HiveOS `miner` command not found - cannot restart the miner")
     if wait_hashing(miner, 240):
         log("  miner is hashing again")
         return
     reboot(st, cfg, "miner did not recover")
+
+
+def cold_power_cycle(secs):
+    """What HiveOS `sreboot wakealarm` does: set the RTC wake alarm, power off at once."""
+    if shutil.which("sreboot"):
+        return sh(["sreboot", "wakealarm", str(secs)], timeout=60)
+    rtc = "/sys/class/rtc/rtc0/wakealarm"
+    if not os.path.exists(rtc):
+        log("  this system has no RTC wake alarm")
+        return None
+    log("  sreboot not found - setting the RTC wake alarm and powering off directly")
+    try:
+        sh(["sync"])
+        with open(rtc, "w") as f:
+            f.write("0")
+        with open(rtc, "w") as f:
+            f.write(f"+{secs}")
+        with open("/proc/sys/kernel/sysrq", "w") as f:
+            f.write("1")
+        with open("/proc/sysrq-trigger", "w") as f:
+            f.write("o")                 # immediate power off
+    except OSError as e:
+        log(f"  direct power-off failed: {e}")
+    return None
 
 
 def need_power_cycle(st, cfg, why):
@@ -739,7 +774,7 @@ def need_power_cycle(st, cfg, why):
             log(f"Cold power cycle ({why}): sreboot wakealarm {cfg['wake_secs']} "
                 f"[{st['power_cycles']}/{cfg['max_reboots']}] - tuning resumes after boot")
             sh(["sync"])
-            r = sh(["sreboot", "wakealarm", str(cfg["wake_secs"])], timeout=60)
+            r = cold_power_cycle(cfg["wake_secs"])
             time.sleep(180)          # normally the rig is off long before this
             out = ((getattr(r, "stdout", "") or "") + (getattr(r, "stderr", "") or "")).strip()
             log(f"Power cycle did not happen{(': ' + out) if out else ''} - "
@@ -775,7 +810,10 @@ def reboot(st, cfg, why):
 def restore_pl(gpu, st, cfg):
     orig = cfg.get("pl_original")
     if orig and cfg.get("pl_levels") and abs(gpu.get_pl() - orig) > 1:
-        set_pl_paused(gpu, Miner(cfg), st, orig)
+        try:
+            set_pl_paused(gpu, Miner(cfg), st, orig)
+        except RuntimeError as e:
+            log(f"Could not restore the power limit: {e}. Set {orig:g} W in HiveOS.")
 
 
 def abort(st, cfg, why):
@@ -887,7 +925,10 @@ def finish(st, cfg, gpu=None, miner=None):
     gpu = gpu or open_gpu(cfg["bus"], wait=60)
     miner = miner or Miner(cfg)
     if best.get("pl") and abs(gpu.get_pl() - best["pl"]) > 1:
-        set_pl_paused(gpu, miner, st, best["pl"])
+        try:
+            set_pl_paused(gpu, miner, st, best["pl"])
+        except RuntimeError as e:
+            log(f"Could not set the power limit: {e}. Set {best['pl']:g} W in HiveOS.")
     apply_settings(gpu, best["offset"], best["cap"])
     systemctl("disable", run_unit(cfg["bus"]))
 
@@ -983,6 +1024,9 @@ def cmd_run(args):
             try:
                 apply_settings(gpu, level_start(st, cfg), None)   # safe clocks while switching
                 ok = set_pl_paused(gpu, miner, st, pl)
+            except RuntimeError as e:
+                abort(st, cfg, str(e))
+                return
             except Exception as e:  # noqa: BLE001
                 if needs_reset(e):
                     reboot(st, cfg, f"driver says the GPU needs a reset ({e})")
@@ -1161,6 +1205,10 @@ def cmd_start(a):
                 f"{a.pl_step} W steps (the miner is paused for each change)")
     else:
         log("This card does not report a power-limit range - tuning at the current limit only")
+
+    if levels and not shutil.which("miner"):
+        sys.exit("A power-limit sweep needs HiveOS's `miner` command to pause the miner, and it "
+                 "was not found. Use --no-pl-sweep, or run this on HiveOS.")
 
     # ---- 2. where to read this card's hashrate
     if not a.hr_path and not a.log_file:
@@ -1360,6 +1408,7 @@ Wants=network-online.target
 
 [Service]
 Type={kind}
+Environment=PATH=/hive/bin:/hive/sbin:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 ExecStart={cmd} --delay {delay}
 TimeoutStartSec=infinity
 Restart=no
