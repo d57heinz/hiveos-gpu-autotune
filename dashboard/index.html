@@ -69,6 +69,11 @@ select:focus-visible,button:focus-visible,input:focus-visible,pre:focus-visible{
 .switch[aria-checked=true] i{background:var(--series)}
 .switch[aria-checked=true] i::after{left:16px;background:#fff}
 .ctl{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin:6px 0 4px}
+.form{display:grid;grid-template-columns:repeat(auto-fit,minmax(210px,1fr));gap:10px 18px;margin:8px 0}
+.form label{display:block;color:var(--muted);font-size:13px;white-space:normal}
+.form input[type=number]{display:block;width:100%;margin-top:3px;font:inherit;color:var(--text);background:var(--page);border:1px solid var(--line);border-radius:4px;padding:4px 8px}
+.cards label{display:inline-block;margin:0 16px 4px 0;font-size:15px;color:var(--text)}
+button.go{border-color:var(--series)}
 .legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:13px;margin-top:4px}
 .legend svg{display:inline-block;width:14px;height:14px;vertical-align:-2px;margin-right:4px}
 pre.log{margin:0;height:430px;overflow:auto;font:12px/1.4 var(--mono);white-space:pre;color:#cfd9e3;background:var(--page);border:1px solid var(--line);border-radius:4px;padding:8px}
@@ -137,7 +142,7 @@ let toastTimer; function toast(msg,bad){ const t=$("toast"); t.textContent=msg; 
 function niceMax(v){ if(!(v>0))return 1; const p=Math.pow(10,Math.floor(Math.log10(v))); for(const m of [1,1.5,2,3,4,5,7.5,10]) if(m*p>=v) return m*p; return 10*p; }
 
 // ---------- layout: panels in one grid; order and width are remembered in this browser
-const RANK=id=>id.startsWith("chart")?0:id.startsWith("gpu:")?1:id=="bests"?2:id=="queue"?3:id.startsWith("tuner:")?4:5;
+const RANK=id=>id.startsWith("chart")?0:id.startsWith("gpu:")?1:id=="bests"?2:id=="queue"?3:id.startsWith("tuner:")?4:id=="start"?5:6;
 const SPAN=id=>id.startsWith("chart")?6:id.startsWith("gpu:")?3:id.startsWith("log-")?4:12;
 let layout={order:[],wide:{}}; try{ layout=Object.assign(layout,JSON.parse(localStorage.getItem("rigmon-layout")||"{}")); }catch(e){}
 function saveLayout(){ layout.order=[...$("grid").children].map(w=>w.dataset.id); try{ localStorage.setItem("rigmon-layout",JSON.stringify(layout)); }catch(e){} }
@@ -293,6 +298,30 @@ function stepsOf(t){
 const same=(b,r)=>b&&r&&b.core_offset===r.offset&&(b.clock_cap_mhz??null)===(r.cap??null)&&(b.power_limit_w??null)===(r.pl??null);
 function useBtn(t,r){ if(!state.controls||t.phase!="done"||!t.best||!r) return "";
   return same(t.best,r)?' <span class="chip ok">✓ applied</span>':` <button data-use='${esc(JSON.stringify({dir:t.dir,pl:r.pl??null,offset:r.offset,cap:r.cap??null}))}' title="Apply this setting to the card now">Use</button>`; }
+function tuneButtons(t){
+  if(!state.controls) return "";
+  const b=(action,label,cls)=>`<button class="${cls||""}" data-tune='${esc(JSON.stringify({dir:t.dir,action,name:t.name}))}'>${label}</button>`;
+  if(t.phase!="done") return `<div class="ctl">${b("stop","Stop tuning")}</div>`;
+  return `<div class="ctl">${t.can_resume?b("resume","Resume tuning","go"):""}${b("rerun","Run again with the same options")}</div>`;
+}
+function renderStart(s){
+  if(!s.controls){ dropWidget("start"); return; }
+  const w=widget("start","Start a tuning run");
+  if(!body(w).firstChild) body(w).innerHTML=`<div class="sub">The chosen cards are tuned one after another, each in its own folder. Leave a box empty to use the default.</div>
+    <div class="cards ctl" id="st-cards"></div>
+    <div class="form">
+      <label>Lowest power limit to test, W<input type="number" id="st-plmin" min="50" max="600" placeholder="card minimum"></label>
+      <label>Highest power limit to test, W<input type="number" id="st-plmax" min="50" max="600" placeholder="card maximum"></label>
+      <label>Starting core offset, MHz<input type="number" id="st-off" min="-200" max="1000" placeholder="0"></label>
+      <label>Highest core offset to try, MHz<input type="number" id="st-offmax" min="-200" max="1000" placeholder="until it crashes (RTX 3090: 300)"></label>
+      <label>Lowest hashrate to accept, % of uncapped<input type="number" id="st-hr" min="0" max="100" placeholder="0 = pure efficiency"></label>
+    </div>
+    <div class="ctl"><label style="font-size:15px;color:var(--text)"><input type="checkbox" id="st-nosweep"> Keep each card's current power limit (no power-limit sweep)</label>
+    <button class="go" id="st-go">Start tuning</button></div>`;
+  const busyBus=new Set(s.tuners.filter(t=>t.phase!="done").map(t=>t.bus)), sig=s.gpus.map(g=>g.index+g.bus+busyBus.has(g.bus)).join("|"), box=$("st-cards");
+  if(box.dataset.sig!==sig){ const was=new Set([...box.querySelectorAll("input:checked")].map(i=>i.value));
+    box.innerHTML=s.gpus.map(g=>`<label><input type="checkbox" value="${g.index}"${was.has(String(g.index))&&!busyBus.has(g.bus)?" checked":""}${busyBus.has(g.bus)?" disabled":""}> GPU ${g.index}: ${esc(g.name)}${busyBus.has(g.bus)?" (tuning now)":""}</label>`).join("")||'<span class="sub">No cards detected.</span>'; box.dataset.sig=sig; }
+}
 function controlsOf(t){
   if(!state.controls||!t.best) return "";
   const b=t.best, cur=`${b.power_limit_w?b.power_limit_w+" W limit, ":""}offset ${fOff(b.core_offset)}, ${b.clock_cap_mhz?"clock cap "+b.clock_cap_mhz+" MHz":"no clock cap"}`;
@@ -320,7 +349,7 @@ function renderTuning(s,force){
     const [cls,msg]=statusOf(t), lv=t.levels_all, sel=pick[t.dir]??"now", cur=curPl(t,sel);
     extra(w).innerHTML=`<span class="sub">slot ${esc(slot(t.bus))}, folder ${esc(t.dir)}</span>`+(lv[0]==null?"":` <label>Power limit shown <select data-dir="${esc(t.dir)}"><option value="now"${sel=="now"?" selected":""}>${t.phase=="done"&&t.best&&t.best.power_limit_w?"applied":"current"} (${curPl(t,"now")} W)</option>${lv.map(p=>`<option value="${p}"${String(p)==sel?" selected":""}>${p} W</option>`).join("")}</select></label>`);
     const rows=t.levels.map(l=>{ const b=l.best,n=l.no_cap; return b?`<tr class="${l.pl===cur?"pick":""}"><td>${l.pl??"current"}${l.pl?" W":""}</td><td>${fOff(b.offset)}</td><td>${b.cap??"none"}</td><td>${fHr(b.hashrate)}</td><td>${b.power} W</td><td>${fEff(b.eff)}${useBtn(t,b)}</td><td>${fOff(n.offset)}</td><td>${fHr(n.hashrate)}</td><td>${n.power} W</td><td>${fEff(n.eff)}${b.cap?useBtn(t,n):""}</td></tr>`:`<tr><td>${l.pl??""} W</td><td colspan="9" style="text-align:left">no stable result (${esc(l.note||"")})</td></tr>`; }).join("");
-    body(w).innerHTML=`<div class="status ${cls}">${esc(msg)}</div>${stepsOf(t)}${controlsOf(t)}
+    body(w).innerHTML=`<div class="status ${cls}">${esc(msg)}</div>${tuneButtons(t)}${stepsOf(t)}${controlsOf(t)}
       <div class="two"><div><h4>Offset search</h4><svg class="so" height="210" role="img" aria-label="Efficiency by core offset"></svg></div>
       <div><h4>Clock cap search</h4><svg class="sc" height="210" role="img" aria-label="Efficiency by clock cap"></svg></div></div>
       <div class="legend"><span><svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="4.5" fill="var(--series)"/></svg>stable test, offset search</span><span><svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="4.5" fill="var(--series2)"/></svg>stable test, cap search</span><span><svg viewBox="0 0 14 14"><path d="M3 3L11 11M11 3L3 11" stroke="var(--crit)" stroke-width="2.5"/></svg>failed test</span><span><svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--text)" stroke-width="1.5"/></svg>best at this power limit</span></div>
@@ -331,6 +360,7 @@ function renderTuning(s,force){
     const sl=extra(w).querySelector("select"); if(sl) sl.onchange=()=>{ pick[t.dir]=sl.value; sl.blur(); renderTuning(state,true); };
   });
   document.querySelectorAll('#grid>[data-id^="tuner:"]').forEach(w=>{ if(!seen.has(w.dataset.id)) w.remove(); });
+  renderStart(s);
   // log panels
   const lt=logWidget("log-tuner","Tuner log"), sel=lt.querySelector("select"), want=s.tuners.map(t=>t.dir).join("|");
   if(sel.dataset.have!==want){ const keep=sel.value, live=s.tuners.find(t=>t.phase!="done"); sel.innerHTML=s.tuners.map(t=>`<option>${esc(t.dir)}</option>`).join(""); sel.dataset.have=want; if(s.tuners.length) sel.value=s.tuners.some(t=>t.dir==keep)?keep:(live||s.tuners[0]).dir; }
@@ -354,7 +384,14 @@ async function post(path,data){
   busy=false; poll();
 }
 $("grid").addEventListener("click",ev=>{
-  const u=ev.target.closest("[data-use]"), v=ev.target.closest("[data-svc]");
+  const u=ev.target.closest("[data-use]"), v=ev.target.closest("[data-svc]"), tn=ev.target.closest("[data-tune]");
+  if(tn){ const d=JSON.parse(tn.dataset.tune), q={stop:`Stop tuning ${d.name}?\n\nThe card goes back to its starting offset and power limit. The miner pauses briefly if the power limit has to be restored. You can resume later.`,
+      resume:`Resume tuning ${d.name} from where it stopped?`, rerun:`Start a fresh tuning run on ${d.name} with the same options?\n\nThis pushes the card until it crashes again and can reboot the rig. Its apply service is turned off while it runs.`}[d.action];
+    if(confirm(q)){ toast("Working… this can take a minute."); post("/api/tune",{dir:d.dir,action:d.action}); } }
+  if(ev.target.id=="st-go"){ const cards=[...document.querySelectorAll("#st-cards input:checked")].map(i=>+i.value), val=id=>$(id).value.trim();
+    if(!cards.length){ toast("Choose at least one card first.",true); return; }
+    if(confirm(`Start tuning GPU ${cards.join(", ")}?\n\nTuning pushes each card until it crashes, pauses the miner for power-limit changes, and can reboot the rig. Apply services for these cards are turned off while they are tuned.`)){
+      toast("Starting… this can take a minute."); post("/api/start",{cards,pl_min:val("st-plmin"),pl_max:val("st-plmax"),offset_start:val("st-off"),offset_max:val("st-offmax"),min_hr_pct:val("st-hr"),no_pl_sweep:$("st-nosweep").checked}); } }
   if(u){ const d=JSON.parse(u.dataset.use), what=d.restore?"the tuner's own pick":`offset ${fOff(d.offset)}, ${d.cap?"clock cap "+d.cap+" MHz":"no clock cap"}${d.pl?" (tested at a "+d.pl+" W limit)":""}`;
     if(confirm(`Apply ${what} to the card now?\n\nThe card's clocks change right away while it is mining.`)){ toast("Applying…"); post("/api/select",d); } }
   if(v){ const d=JSON.parse(v.dataset.svc);

@@ -19,10 +19,10 @@ Usage (as root on the rig):
 Then open  http://<rig-ip>:8088  from any device on your network.
 
 It reads nvidia-smi, the miner's local API (OneZeroMiner), the autotune folders,
-the miner log and syslog. For a card whose tuning has finished, the page can also
-(1) turn that card's apply service on or off and (2) apply another tested, stable
-setting from its results. It can do nothing else to the rig; --read-only removes
-those two controls. There is no login - anyone on your network who can reach the
+the miner log and syslog. It can also start, stop, resume and re-run tuning, and for
+a card whose tuning has finished (1) turn its apply service on or off and (2) apply
+another tested, stable setting from its results. It does all of this by calling
+autotune.py; --read-only removes every control. There is no login - anyone on your network who can reach the
 rig can use the page, so don't forward the port to the internet.
 """
 import argparse
@@ -210,7 +210,8 @@ def read_tuners():
             "levels": st.get("levels", []), "best": load_json(os.path.join(d, "best.json")),
             "offset_max": cfg.get("offset_max"),
             "apply": applied.get(d, {"unit": None, "enabled": False, "active": False}),
-            "custom": os.path.exists(os.path.join(d, "best.auto.json"))})
+            "custom": os.path.exists(os.path.join(d, "best.auto.json")),
+            "can_resume": bool(st.get("resume_phase")) and st.get("phase") == "done"})
     queue = None
     for d in [ROOT] + tuner_dirs():
         q = load_json(os.path.join(d, "queue.json"))
@@ -251,6 +252,67 @@ def autotune(d, *args, timeout=90):
         return r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1:] or [""]
     except Exception as e:  # noqa: BLE001
         return False, [str(e)]
+
+
+def tune_action(name, action):
+    d = tuner_dir(name)
+    st = load_json(os.path.join(d, "state.json")) or {}
+    active = st.get("phase") not in (None, "done")
+    if action == "stop":
+        if not active:
+            raise Refused("This run is not active.")
+        ok, out = autotune(d, "stop", timeout=240)
+        msg = "Tuning stopped. The card is back on its starting offset and power limit. You can resume it later."
+    elif action == "resume":
+        ok, out = autotune(d, "resume", timeout=120)
+        msg = "Resumed. The run carries on from where it stopped, in about 20 seconds."
+    elif action == "rerun":
+        if active:
+            raise Refused("This run is still active. Stop it first.")
+        ok, out = autotune(d, "rerun", timeout=180)
+        msg = "A fresh run with the same options has started. Its earlier results are kept as results.csv.old."
+    else:
+        raise Refused("Unknown action.")
+    _APPLY_CACHE["t"] = 0
+    if not ok:
+        raise Refused(out[0] or "The tuner refused.")
+    return msg
+
+
+def start_new(body):
+    with LOCK:
+        known = {g["index"] for g in LATEST["gpus"]}
+    try:
+        cards = [int(c) for c in body.get("cards", [])]
+    except (TypeError, ValueError):
+        cards = []
+    if not cards or any(c not in known for c in cards):
+        raise Refused("Choose at least one card.")
+    args = ["start", "--cards", ",".join(map(str, cards))]
+
+    def number(key, flag, lo, hi, scale=1.0):
+        v = body.get(key)
+        if v in (None, ""):
+            return
+        try:
+            v = float(v)
+        except (TypeError, ValueError):
+            raise Refused(f"{key} must be a number.")
+        if not lo <= v <= hi:
+            raise Refused(f"{key} must be between {lo} and {hi}.")
+        args.extend([flag, str(v * scale if scale != 1.0 else int(v))])
+    number("pl_min", "--pl-min", 50, 600)
+    number("pl_max", "--pl-max", 50, 600)
+    number("offset_start", "--offset-start", -200, 1000)
+    number("offset_max", "--offset-max", -200, 1000)
+    number("min_hr_pct", "--min-hr-frac", 0, 100, 0.01)
+    if body.get("no_pl_sweep"):
+        args.append("--no-pl-sweep")
+    ok, out = autotune(ROOT, *args, timeout=240)
+    if not ok:
+        raise Refused(out[0] or "The tuner refused to start.")
+    return ("Started. The cards are tuned one after another, each in its own folder. "
+            "The first test begins in about 90 seconds.")
 
 
 def set_apply_service(name, on):
@@ -383,6 +445,10 @@ class Handler(BaseHTTPRequestHandler):
                     msg = set_apply_service(str(body.get("dir")), bool(body.get("on")))
                 elif self.path == "/api/select":
                     msg = select_setting(str(body.get("dir")), body)
+                elif self.path == "/api/tune":
+                    msg = tune_action(str(body.get("dir")), str(body.get("action")))
+                elif self.path == "/api/start":
+                    msg = start_new(body)
                 else:
                     self.send_error(404)
                     return

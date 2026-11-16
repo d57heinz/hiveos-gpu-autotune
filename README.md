@@ -225,9 +225,12 @@ Log lines to look for:
 | `NEEDS A COLD POWER CYCLE` | Switch the rig off at the PSU for ~30 s, then power on. The run continues by itself |
 | `FINISHED` | Done. See `best.json` and `summary.txt` |
 
-To stop early (restores the starting offset and power limit):
+To stop early (restores the starting offset and power limit), and to carry on
+later:
 ```bash
 python3 autotune.py stop
+python3 autotune.py resume      # continue the stopped run, keeping its results
+python3 autotune.py rerun       # or start this card over with the same options
 ```
 
 To re-tune a card later (e.g. with a different power-limit range), stop the card's
@@ -267,6 +270,19 @@ width and the full page width, and "Logs full width" does that for the three log
 panels at once (one per row instead of three). The arrangement is remembered in
 your browser; "Reset layout" restores the default.
 
+**Starting and stopping tuning from the page.**
+
+- "Start a tuning run": tick the cards, optionally set the power-limit range,
+  starting and highest offset and the lowest hashrate you'd accept, then
+  "Start tuning". The cards are tuned one after another, each in its own folder.
+- "Stop tuning" on an active run puts the card back on its starting offset and
+  power limit.
+- "Resume tuning" carries a stopped run on from where it stopped, keeping its
+  results. "Run again with the same options" starts that card over.
+
+The same actions exist on the command line: `autotune.py stop`, `resume` and
+`rerun`, run in the card's folder.
+
 **Controls for a tuned card.** When a card's tuning has finished, its panel has:
 
 - a switch that turns the card's apply service on or off (whether its settings
@@ -292,7 +308,7 @@ python3 dashboard/monitor.py                      # run in the terminal instead
 ```
 `start --no-dashboard` skips it.
 
-Apart from the two controls above, the page only reads: `nvidia-smi`, the
+Apart from the controls above, which all work by calling `autotune.py`, the page only reads: `nvidia-smi`, the
 miner's local API (OneZeroMiner), the `autotune*` folders, the miner log and
 syslog. It has no login, so anyone on your network can view it and use those
 controls. Don't forward the port to the internet. Hashrate, shares and voltage

@@ -49,6 +49,8 @@ prints its address; --no-dashboard skips that.
   status                    every test so far + the current level
   report                    best result per power level + every test (summary.txt)
   stop                      stop tuning, restore starting offset and power limit
+  resume                    carry on a stopped run, keeping its results
+  rerun                     fresh run on the same card with the same options
   apply [--watch]           apply best.json now (--watch keeps re-applying)
   install-apply             apply best.json automatically at every boot
   uninstall                 remove this folder's services
@@ -1795,6 +1797,8 @@ def cmd_stop(_a):
                   "continue them with `autotune.py queue --resume`.")
     if st:
         release_unit(run_unit(st["cfg"]["bus"]), stop=True)
+        if st.get("phase") not in (None, "done"):
+            st["resume_phase"] = st["phase"]          # lets `resume` carry on from here
         st["phase"] = "done"
         st["in_progress"] = None
         st.setdefault("abort", "stopped by user")
@@ -1809,6 +1813,89 @@ def cmd_stop(_a):
                    if st["cfg"].get("pl_levels") else "") + ".")
         except Exception as e:  # noqa: BLE001
             log(f"Stopped, but could not reset the GPU: {e}")
+
+
+def other_active_run(bus):
+    """Folder of another active run on this card, or None."""
+    other = unit_script(run_unit(bus))
+    if other and other != SCRIPT:
+        ost = None
+        try:
+            ost = json.load(open(os.path.join(os.path.dirname(other), "state.json")))
+        except (OSError, ValueError):
+            pass
+        if ost and ost.get("phase") not in (None, "done"):
+            return os.path.dirname(other)
+    return None
+
+
+def launch_run(bus):
+    unit = run_unit(bus)
+    au = apply_unit(bus)        # an apply service would fight the run
+    r = sh(["systemctl", "is-enabled", au], timeout=15) if shutil.which("systemctl") else None
+    if r and (r.stdout or "").strip() == "enabled":
+        systemctl("stop", au)
+        systemctl("disable", au)
+        log(f"Stopped {au} for this run. Turn it on again when the run ends.")
+    install_unit(os.path.join(UNIT_DIR, unit), f"GPU autotune for {bus} (resumes after reboot)",
+                 f"{sys.executable} {SCRIPT} run", "simple", delay=20)
+    systemctl("enable", unit)
+    systemctl("start", "--no-block", unit)
+
+
+def cmd_resume(_a):
+    """Carry on a run that was stopped with `stop`, keeping every result so far."""
+    if os.geteuid() != 0:
+        sys.exit("Run as root.")
+    st = load_state()
+    if not st or not st.get("resume_phase") or st.get("phase") != "done":
+        sys.exit("There is no stopped run to resume in this folder.")
+    bus = st["cfg"]["bus"]
+    busy = other_active_run(bus)
+    if busy:
+        sys.exit(f"This card already has an active tuning run in {busy}.")
+    st["phase"] = st.pop("resume_phase")
+    st.pop("abort", None)
+    st.update(in_progress=None, waiting_power_cycle=None, fresh=True, applied_pl=None, reboots=0)
+    save_state(st)
+    qp = st["cfg"].get("queue")
+    if qp and os.path.exists(qp):
+        q = load_queue(qp)
+        for c in q["cards"]:
+            if c["bus"] == bus and c["status"] == "stopped":
+                c["status"] = "running"
+        save_queue(qp, q)
+    launch_run(bus)
+    log(f"Resumed the stopped run on {bus}; it continues from where it stopped.")
+
+
+def cmd_rerun(_a):
+    """Start a fresh run on the same card with the same options as the last one here."""
+    if os.geteuid() != 0:
+        sys.exit("Run as root.")
+    st = load_state()
+    if not st:
+        sys.exit("No earlier run in this folder.")
+    if st.get("phase") not in (None, "done"):
+        sys.exit("A run is still active here. Stop it first.")
+    cfg = st["cfg"]
+    args = ["--bus", cfg["bus"], "--force"]
+    for key, flag in QUEUE_PASS:
+        if key in ("pl_min", "pl_max", "pl_step"):
+            continue
+        if cfg.get(key) is not None:
+            args += [flag, str(cfg[key])]
+    lv = cfg.get("pl_levels")
+    if lv:
+        args += ["--pl-min", str(lv[0]), "--pl-max", str(lv[-1])]
+        if len(lv) > 1:
+            args += ["--pl-step", str(lv[1] - lv[0])]
+    else:
+        args.append("--no-pl-sweep")
+    if not cfg.get("pl_reuse_offset", True):
+        args.append("--pl-full-offset-search")
+    res = subprocess.run([sys.executable, SCRIPT, "start"] + args, stdin=subprocess.DEVNULL)
+    sys.exit(res.returncode)
 
 
 def cmd_apply(a):
@@ -2004,6 +2091,8 @@ def main():
     sub.add_parser("status", help="show results")
     sub.add_parser("report", help="print the summary table (also saved to summary.txt)")
     sub.add_parser("stop", help="stop and restore starting settings")
+    sub.add_parser("resume", help="carry on a run that was stopped with `stop`")
+    sub.add_parser("rerun", help="start a fresh run on the same card with the same options")
     qu = sub.add_parser("queue", help="show the `start --all` queue and each card's result")
     qu.add_argument("--resume", action="store_true", help="start the next pending card")
     ap = sub.add_parser("apply", help="apply best.json")
@@ -2015,7 +2104,8 @@ def main():
     a = p.parse_args()
     {"probe": cmd_probe, "start": cmd_start, "run": cmd_run, "status": cmd_status,
      "report": cmd_report, "queue": cmd_queue,
-     "stop": cmd_stop, "apply": cmd_apply, "install-apply": cmd_install_apply,
+     "stop": cmd_stop, "resume": cmd_resume, "rerun": cmd_rerun,
+     "apply": cmd_apply, "install-apply": cmd_install_apply,
      "uninstall": cmd_uninstall}[a.cmd](a)
 
 
