@@ -46,7 +46,7 @@ if:
 - the miner stops hashing
 - there are any hardware/invalid shares
 - there are more than 2 rejected shares (stale shares happen)
-- no shares are accepted
+- no shares are accepted during warm-up and sample, nor in a further 2-minute wait
 
 **At the end** it writes:
 
@@ -215,7 +215,10 @@ Log lines to look for:
 | Log line | Meaning |
 |---|---|
 | `TEST PL 200 W, offset +255, cap none` | A test has started |
-| `OK  143.91 TH/s  199.2 W  eff 0.723 TH/W ...` | A test passed |
+| `warmup done - sampling for 180s` | The measurement window has started |
+| `OK  143.91 TH/s  199.2 W  eff 0.723 TH/W ... shares 6` | A test passed (accepted shares during the test) |
+| `no accepted share in the sample window, but 2 during warmup` | Unlucky stretch; the test still counts |
+| `no accepted share yet ... waiting up to 120s more` | No share at all so far; it waits for one before failing the test |
 | `UNSTABLE: Xid error in kernel log` | The setting crashed the card (expected near the limit) |
 | `Retrying offset +330 once ...` | First crash at this setting, retrying |
 | `LEVEL DONE (PL 200 W): best ...` | One power level is finished |
@@ -290,6 +293,7 @@ limit is different. Back the offset off by about 30 MHz on a different card.
 | `--margin N` | 30 | MHz to stay below the lowest offset that kept crashing |
 | `--cap-step N` | auto (~1%) | MHz per clock-cap step |
 | `--min-hr-frac F` | 0 | Never accept less than this fraction of the uncapped hashrate (e.g. 0.9) |
+| `--share-grace S` | 120 | Extra seconds to wait for a share when none arrived during warm-up and sample |
 | `--patience N` | 3 | Tests without an efficiency gain before a phase stops |
 | `--crash-retries N` | 1 | Retries before a setting counts as "keeps crashing" |
 | `--pl-min W` / `--pl-max W` / `--pl-step W` | card limits / 10 | Power-limit sweep range |

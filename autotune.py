@@ -511,7 +511,22 @@ def run_test(gpu, miner, cfg, st, offset, cap, pl=None):
     xid0 = xid_count(gpu.short_bus)
     hw0, rej0, acc0 = miner.counter("hw_path"), miner.counter("rej_path"), miner.counter("acc_path")
     samples, dead_since, t0 = [], None, time.time()
-    while time.time() - t0 < warm + cfg["sample"]:
+    limit = warm + cfg["sample"]
+    acc_s, grace = None, False        # accepted shares at sample start; share-wait extension
+    while True:
+        el = time.time() - t0
+        if el >= limit:
+            acc = miner.counter("acc_path")
+            if grace or acc0 is None or acc is None or acc > acc0 or not cfg.get("share_grace"):
+                break
+            # no share in warmup + sample: wait a little longer before calling it a failure
+            grace, limit = True, limit + cfg["share_grace"]
+            log(f"  no accepted share yet in warmup or sample - waiting up to "
+                f"{cfg['share_grace']}s more for one")
+        if grace:
+            acc = miner.counter("acc_path")
+            if acc is not None and acc > acc0:
+                break
         time.sleep(cfg["tick"])
         try:  # HiveOS / the miner may reset clocks when the miner restarts
             fixed = enforce(gpu, offset, cap)
@@ -540,11 +555,24 @@ def run_test(gpu, miner, cfg, st, offset, cap, pl=None):
             continue
         dead_since = None
         if time.time() - t0 >= warm:
+            if acc_s is None and not samples:
+                acc_s = miner.counter("acc_path")
+                log(f"  warmup done - sampling for {cfg['sample']}s")
             samples.append((hr, gpu.power(), gpu.clock(), gpu.temp(), miner.counter("volt_path")))
 
     acc = miner.counter("acc_path")
-    if acc0 is not None and acc is not None and acc <= acc0:
-        return fail("no accepted shares during the test")
+    shares = None
+    if acc0 is not None and acc is not None:
+        if acc <= acc0:
+            return fail("no accepted shares during the test"
+                        + (f" (waited {cfg['share_grace']}s extra)" if grace else ""))
+        shares = int(acc - acc0)
+        in_sample = int(acc - acc_s) if acc_s is not None else shares
+        if grace:
+            log("  a share arrived during the extra wait - counting the test as valid")
+        elif in_sample <= 0:
+            log(f"  no accepted share in the sample window, but {shares} during warmup - "
+                f"counting the test as valid")
     if len(samples) < 3:
         return fail("not enough samples")
     n = len(samples)
@@ -559,7 +587,8 @@ def run_test(gpu, miner, cfg, st, offset, cap, pl=None):
            "rejects": None if rej0 is None or miner.counter("rej_path") is None
            else int(miner.counter("rej_path") - rej0)}
     log(f"  OK  {fmt_hr(hr)}  {pw:.1f} W  eff {fmt_eff(hr / pw)}  "
-        f"clk {res['clock']} MHz  {res['temp']}C" + (f"  {res['volt']} mV" if res['volt'] else ""))
+        f"clk {res['clock']} MHz  {res['temp']}C" + (f"  {res['volt']} mV" if res['volt'] else "")
+        + (f"  shares {shares}" if shares is not None else ""))
     return res
 
 
@@ -1109,6 +1138,7 @@ QUEUE_PASS = [("offset_start", "--offset-start"), ("offset_max", "--offset-max")
               ("crash_retries", "--crash-retries"), ("first_warmup", "--first-warmup"),
               ("warmup", "--warmup"), ("sample", "--sample"), ("tick", "--tick"),
               ("dead_secs", "--dead-secs"), ("max_rejects", "--max-rejects"),
+              ("share_grace", "--share-grace"),
               ("max_reboots", "--max-reboots"), ("pl_min", "--pl-min"), ("pl_max", "--pl-max"),
               ("pl_step", "--pl-step"), ("power_cycle", "--power-cycle"),
               ("wake_secs", "--wake-secs"), ("api_url", "--api-url")]
@@ -1584,7 +1614,8 @@ def cmd_start(a):
         "source", "api_url", "hr_path", "acc_path", "rej_path", "hw_path", "volt_path",
         "log_file", "miner_gpu", "offset_start", "offset_step",
         "margin", "cap_step", "cap_min", "min_hr_frac", "warmup", "sample", "tick",
-        "dead_secs", "max_reboots", "max_rejects", "bus_number", "power_cycle", "wake_secs",
+        "dead_secs", "max_reboots", "max_rejects", "share_grace", "bus_number", "power_cycle",
+        "wake_secs",
         "patience", "crash_retries")}
     cfg.update(pl_levels=levels, pl_original=pl_now, pl_reuse_offset=not a.pl_full_offset_search,
                first_warmup=a.first_warmup)
@@ -1876,6 +1907,9 @@ def main():
     s.add_argument("--tick", type=int, default=10)
     s.add_argument("--dead-secs", type=int, default=120, help="seconds without hashrate = crash")
     s.add_argument("--max-rejects", type=int, default=2, help="rejects allowed per test (stales happen)")
+    s.add_argument("--share-grace", type=int, default=120,
+                   help="extra seconds to wait for a share when none came in warmup + sample "
+                        "(0 = fail at once)")
     s.add_argument("--max-reboots", type=int, default=3,
                    help="reboots / power cycles in a row before giving up")
     s.add_argument("--power-cycle", choices=["wakealarm", "manual"], default="wakealarm",
