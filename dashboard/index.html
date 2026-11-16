@@ -251,7 +251,7 @@ function renderCharts(){
     lineChart(body(w).firstChild,pts,fmt); extra(w).innerHTML=`<span class="sub">${pts.length?"now "+fmt(pts.at(-1)[1]):""}</span>`; }
 }
 function renderGpus(s){
-  const cut=Date.now()/1000-3600, tun={}; for(const t of s.tuners) if(!tun[t.bus]||t.phase!="done") tun[t.bus]=t;
+  markRuns(s); const cut=Date.now()/1000-3600, tun={}; for(const t of s.tuners) if(!t.old) tun[t.bus]=t;
   const seen=new Set();
   for(const g of s.gpus){
     const id="gpu:"+g.bus; seen.add(id); const w=widget(id,`GPU ${g.index}: ${g.name}`);
@@ -273,7 +273,9 @@ function renderGpus(s){
   document.querySelectorAll('#grid>[data-id^="gpu:"]').forEach(w=>{ if(!seen.has(w.dataset.id)) w.remove(); });
 }
 function statusOf(t){
+  if(t.old) return ["",`Earlier run on this card${t.abort?" ("+t.abort+")":t.phase=="done"?" (finished)":""}. The newer run is in folder ${t.newer}.`];
   if(t.waiting) return ["bad","⚠ Waiting for a cold power cycle: "+t.waiting+". Switch the rig off at the PSU for 10 seconds, then power on."];
+  if(t.abort=="stopped by user") return ["","Stopped by you. Resume it or run it again."];
   if(t.abort) return ["bad","Stopped: "+t.abort];
   if(t.phase=="done") return ["","Finished."];
   const ip=t.in_progress; if(!ip) return ["","Between tests."];
@@ -282,11 +284,12 @@ function statusOf(t){
 }
 function curPl(t,sel){ if(sel!="now") return sel=="null"?null:+sel; return t.phase=="done"&&t.best&&t.best.power_limit_w?t.best.power_limit_w:t.pl_now; }
 function stepsOf(t){
-  const lv=t.levels_all, multi=lv[0]!=null, done=t.phase=="done", ip=t.in_progress, here=t.results.filter(r=>(r.pl??null)===(t.pl_now??null));
+  const lv=t.levels_all, multi=lv[0]!=null, done=t.phase=="done"&&!t.abort, ip=t.in_progress, here=t.results.filter(r=>(r.pl??null)===(t.pl_now??null));
   const items=[]; if(multi) items.push([`Power limit ${t.pl_now} W (${Math.min(t.pl_i+1,lv.length)} of ${lv.length})`, done?"done":"now"]);
   items.push([`Offset search${t.phase=="offset"&&!done?`, test ${here.filter(r=>r.phase=="offset").length+1}`:""}`, done||t.phase=="cap"?"done":"now"]);
   items.push([`Clock cap search${t.phase=="cap"?`, test ${here.filter(r=>r.phase=="cap").length+1}${t.safe_offset!=null?" at offset "+fOff(t.safe_offset):""}`:""}`, done?"done":t.phase=="cap"?"now":""]);
-  items.push([done&&!t.abort?"Finished":"Result", done&&!t.abort?"done":""]);
+  items.push([done?"Finished":"Result", done?"done":""]);
+  if(t.abort) items.forEach(x=>{ if(x[1]=="now") x[1]=""; });
   let html=`<ol class="steps" aria-label="Steps of this tuning run">${items.map(([x,c])=>`<li class="${c}"${c=="now"?' aria-current="step"':""}>${c=="done"?"✓ ":""}${esc(x)}</li>`).join("")}</ol>`;
   if(ip&&!done&&!t.waiting){ const warm=ip.warm??t.warmup??30, total=warm+(t.sample||180), age=Math.max(0,Date.now()/1000-ip.started), pct=Math.min(100,age/total*100);
     const what=age<warm?`Warming up, ${Math.ceil(warm-age)} s until sampling starts`:age<total?`Sampling, ${Math.ceil(total-age)} s left`:"Finishing this test (waiting for a share or the next step)";
@@ -299,7 +302,7 @@ const same=(b,r)=>b&&r&&b.core_offset===r.offset&&(b.clock_cap_mhz??null)===(r.c
 function useBtn(t,r){ if(!state.controls||t.phase!="done"||!t.best||!r) return "";
   return same(t.best,r)?' <span class="chip ok">✓ applied</span>':` <button data-use='${esc(JSON.stringify({dir:t.dir,pl:r.pl??null,offset:r.offset,cap:r.cap??null}))}' title="Apply this setting to the card now">Use</button>`; }
 function tuneButtons(t){
-  if(!state.controls) return "";
+  if(!state.controls||t.old) return "";
   const b=(action,label,cls)=>`<button class="${cls||""}" data-tune='${esc(JSON.stringify({dir:t.dir,action,name:t.name}))}'>${label}</button>`;
   if(t.phase!="done") return `<div class="ctl">${b("stop","Stop tuning")}</div>`;
   return `<div class="ctl">${t.can_resume?b("resume","Resume tuning","go"):""}${b("rerun","Run again with the same options")}</div>`;
@@ -323,7 +326,7 @@ function renderStart(s){
     box.innerHTML=s.gpus.map(g=>`<label><input type="checkbox" value="${g.index}"${was.has(String(g.index))&&!busyBus.has(g.bus)?" checked":""}${busyBus.has(g.bus)?" disabled":""}> GPU ${g.index}: ${esc(g.name)}${busyBus.has(g.bus)?' <span class="sub">(tuning now. Press “Stop tuning” on its panel first)</span>':""}</label>`).join("")||'<span class="sub">No cards detected.</span>'; box.dataset.sig=sig; }
 }
 function controlsOf(t){
-  if(!state.controls||!t.best) return "";
+  if(!state.controls||!t.best||(t.old&&!t.apply.unit)) return "";
   const b=t.best, cur=`${b.power_limit_w?b.power_limit_w+" W limit, ":""}offset ${fOff(b.core_offset)}, ${b.clock_cap_mhz?"clock cap "+b.clock_cap_mhz+" MHz":"no clock cap"}`;
   if(t.phase!="done") return "";
   const on=t.apply.enabled;
@@ -333,18 +336,25 @@ function controlsOf(t){
     <div class="sub">Pick another tested setting with a “Use” button in the table. The power limit itself is set in HiveOS.${on&&!t.apply.active?" The apply service is enabled but not running right now.":""}</div>`;
 }
 function renderBests(s){
-  const rows=s.tuners.filter(t=>t.best).map(t=>{ const b=t.best,h=b.hiveos_only||{}; return `<tr><td>${esc(t.name)}</td><td>${esc(slot(t.bus))}</td><td>${b.power_limit_w?b.power_limit_w+" W":"as set"}</td><td>${fOff(b.core_offset)}</td><td>${b.clock_cap_mhz?b.clock_cap_mhz+" MHz":"none"}</td><td>${fHr(b.hashrate)}</td><td>${b.power_w} W</td><td>${fEff(b.eff)}</td><td>${t.apply.enabled?"on":"off"}</td><td>${h.core_offset!=null?`${h.power_limit_w?h.power_limit_w+" W, ":""}${fOff(h.core_offset)}: ${fHr(h.hashrate)}, ${fEff(h.eff)}`:"–"}</td></tr>`; }).join("");
+  const shown=s.tuners.filter(t=>t.best&&(!t.old||t.apply.enabled||!s.tuners.some(o=>o.bus==t.bus&&!o.old&&o.best)));
+  const rows=shown.map(t=>{ const b=t.best,h=b.hiveos_only||{}; return `<tr><td>${esc(t.name)}</td><td>${esc(slot(t.bus))}</td><td>${b.power_limit_w?b.power_limit_w+" W":"as set"}</td><td>${fOff(b.core_offset)}</td><td>${b.clock_cap_mhz?b.clock_cap_mhz+" MHz":"none"}</td><td>${fHr(b.hashrate)}</td><td>${b.power_w} W</td><td>${fEff(b.eff)}</td><td>${t.apply.enabled?"on":"off"}</td><td>${h.core_offset!=null?`${h.power_limit_w?h.power_limit_w+" W, ":""}${fOff(h.core_offset)}: ${fHr(h.hashrate)}, ${fEff(h.eff)}`:"–"}</td></tr>`; }).join("");
   if(!rows){ dropWidget("bests"); return; }
-  const pending=s.tuners.filter(t=>!t.best).length, w=widget("bests","Settings in use for each tuned card");
+  const pending=s.tuners.filter(t=>!t.old&&!t.best).length, w=widget("bests","Settings in use for each tuned card");
   extra(w).innerHTML=`<span class="sub">${pending?pending+" card"+(pending>1?"s":"")+" still without a result":""}</span>`;
   body(w).innerHTML=`<div class="scroll"><table><tr><th>Card</th><th>Slot</th><th>Power limit</th><th>Core offset</th><th>Clock cap</th><th>Hashrate</th><th>Power</th><th>Efficiency</th><th>Kept applied</th><th>Tuner's best without a cap</th></tr>${rows}</table></div>`;
 }
+function markRuns(s){   // per card: the run that counts is the active one, else the most recently started
+  const by={}; for(const t of s.tuners) (by[t.bus]=by[t.bus]||[]).push(t);
+  for(const bus in by){ const list=by[bus], cur=list.find(t=>t.phase!="done")||[...list].sort((a,b)=>String(b.started||"").localeCompare(String(a.started||"")))[0];
+    for(const t of list){ t.old=t!==cur; t.newer=cur.dir; } }
+}
 function renderTuning(s,force){
+  markRuns(s);
   renderBests(s);
   if(s.queue){ body(widget("queue","Tuning queue")).innerHTML=`<div class="scroll"><table><tr><th>Card</th><th>Slot</th><th>Status</th></tr>${s.queue.map(c=>`<tr><td>${esc(c.name.replace("NVIDIA GeForce ",""))}</td><td>${esc(slot(c.bus))}</td><td>${esc(c.status)}</td></tr>`).join("")}</table></div>`; } else dropWidget("queue");
   const seen=new Set();
   s.tuners.forEach(t=>{
-    const id="tuner:"+t.dir; seen.add(id); const w=widget(id,`Tuning: ${t.name}`);
+    const id="tuner:"+t.dir; seen.add(id); const w=widget(id,`Tuning: ${t.name}`); w.querySelector("h3").textContent=(t.old?"Earlier run: ":"Tuning: ")+t.name;
     if(!force&&w.contains(document.activeElement)&&document.activeElement.tagName=="SELECT") return;   // don't rebuild under an open menu
     const [cls,msg]=statusOf(t), lv=t.levels_all, sel=pick[t.dir]??"now", cur=curPl(t,sel);
     extra(w).innerHTML=`<span class="sub">slot ${esc(slot(t.bus))}, folder ${esc(t.dir)}</span>`+(lv[0]==null?"":` <label>Power limit shown <select data-dir="${esc(t.dir)}"><option value="now"${sel=="now"?" selected":""}>${t.phase=="done"&&t.best&&t.best.power_limit_w?"applied":"current"} (${curPl(t,"now")} W)</option>${lv.map(p=>`<option value="${p}"${String(p)==sel?" selected":""}>${p} W</option>`).join("")}</select></label>`);
