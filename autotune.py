@@ -43,6 +43,9 @@ Commands
   start --all               tune every card in turn, each in its own folder
                             (../autotune-<slot>/), so results never overlap
   queue [--resume]          show the --all queue and each card's best result
+
+`start` also installs and starts the web dashboard (dashboard/monitor.py) and
+prints its address; --no-dashboard skips that.
   status                    every test so far + the current level
   report                    best result per power level + every test (summary.txt)
   stop                      stop tuning, restore starting offset and power limit
@@ -118,6 +121,40 @@ def model_offset_max(name):
         if key.upper() in name.upper():
             return val
     return None
+
+
+DASH_UNIT = "gpu-autotune-monitor.service"
+
+
+def rig_ip():
+    r = sh(["hostname", "-I"], timeout=10)
+    ips = (r.stdout if r else "").split()
+    return ips[0] if ips else "RIG-IP"
+
+
+def dashboard_url():
+    """URL of the web dashboard if its service is installed, else None."""
+    try:
+        m = re.search(r"--port (\d+)", open(os.path.join(UNIT_DIR, DASH_UNIT)).read())
+    except OSError:
+        return None
+    return f"http://{rig_ip()}:{m.group(1) if m else 8088}"
+
+
+def ensure_dashboard():
+    """Install and start the web dashboard (dashboard/monitor.py) if this folder has it."""
+    mon = os.path.join(BASE, "dashboard", "monitor.py")
+    if os.path.exists(mon) and shutil.which("systemctl"):
+        try:
+            cur = open(os.path.join(UNIT_DIR, DASH_UNIT)).read()
+        except OSError:
+            cur = ""
+        active = sh(["systemctl", "is-active", DASH_UNIT], timeout=15)
+        if mon not in cur or not active or (active.stdout or "").strip() != "active":
+            port = re.search(r"--port (\d+)", cur)
+            sh([sys.executable, mon, "install"] + (["--port", port.group(1)] if port else []),
+               timeout=60)
+    return dashboard_url()
 
 
 def _slug(bus):
@@ -488,7 +525,7 @@ def set_pl_paused(gpu, miner, st, watts):
 def run_test(gpu, miner, cfg, st, offset, cap, pl=None):
     warm = cfg.get("first_warmup", cfg["warmup"]) if st.get("fresh", True) else cfg["warmup"]
     st["in_progress"] = {"phase": st["phase"], "offset": offset, "cap": cap, "pl": pl,
-                         "started": time.time()}
+                         "started": time.time(), "warm": warm}
     save_state(st)
     label = (f"PL {pl:g} W, " if pl else "") + f"offset {offset:+d}, cap {cap or 'none'}"
     log(f"TEST {label}  ({warm}s warmup + {cfg['sample']}s sample)")
@@ -1213,8 +1250,10 @@ def cmd_start_all(a):
     log(f"QUEUE: {len(cards)} card(s) queued in {QUEUE}")
     if queue_launch_next(QUEUE):
         first = next(c for c in load_queue(QUEUE)["cards"] if c["status"] == "running")
+        url = dashboard_url() if a.no_dashboard else ensure_dashboard()
         print(f"\nStarted. Check the whole queue with:   python3 {SCRIPT} queue\n"
-              f"Follow the active card with:           tail -f {first['dir']}/autotune.log")
+              f"Follow the active card with:           tail -f {first['dir']}/autotune.log"
+              + (f"\nDashboard in your browser:             {url}" if url else ""))
 
 
 def find_queue():
@@ -1658,6 +1697,9 @@ def cmd_start(a):
     systemctl("enable", unit)
     systemctl("start", "--no-block", unit)
     log(f"Service: {unit}")
+    url = dashboard_url() if a.no_dashboard else ensure_dashboard()
+    if url:
+        log(f"Dashboard (live stats, tuning progress, logs):  {url}")
     log(f"Started in the background. Follow it with:  tail -f {LOG}")
 
 
@@ -1870,6 +1912,8 @@ def main():
     s.add_argument("--no-auto-apply", action="store_true",
                    help="with --all: don't install each card's apply service when it finishes")
     s.add_argument("--queue", help=argparse.SUPPRESS)
+    s.add_argument("--no-dashboard", action="store_true",
+                   help="don't install/start the web dashboard")
     s.add_argument("--source", choices=["api", "log"], default="api")
     s.add_argument("--api-url", default="http://127.0.0.1:63005")
     s.add_argument("--hr-path", help="JSON path of this GPU's hashrate (from probe)")

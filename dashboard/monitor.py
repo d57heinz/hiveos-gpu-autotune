@@ -10,10 +10,11 @@ Shows, on one page that refreshes itself:
   - three live log panes side by side: tuner log, miner output, syslog
 
 Usage (as root on the rig):
-  python3 monitor.py                 run in this terminal on port 8088
-  python3 monitor.py --port 9000     another port
-  python3 monitor.py install         run at every boot (systemd service)
-  python3 monitor.py uninstall       remove the service
+  python3 dashboard/monitor.py                 run in this terminal on port 8088
+  python3 dashboard/monitor.py --port 9000     another port
+  python3 dashboard/monitor.py install         run at every boot (systemd service)
+  python3 dashboard/monitor.py uninstall       remove the service
+`autotune.py start` installs and starts it for you.
 
 Then open  http://<rig-ip>:8088  from any device on your network.
 
@@ -37,8 +38,9 @@ import urllib.parse
 import urllib.request
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 
-BASE = os.path.dirname(os.path.abspath(__file__))
-PARENT = os.path.dirname(BASE)
+BASE = os.path.dirname(os.path.abspath(__file__))      # .../<clone>/dashboard
+ROOT = os.path.dirname(BASE)                           # the clone (holds autotune.py)
+PARENT = os.path.dirname(ROOT)                         # where the per-card folders live
 UNIT = "/etc/systemd/system/gpu-autotune-monitor.service"
 SAMPLE_SECS = 10
 HISTORY = collections.deque(maxlen=6 * 360)          # 6 hours of 10 s samples
@@ -67,17 +69,17 @@ def num(x):
 # ------------------------------------------------------------------ collectors
 def read_gpus():
     fields = ("index,name,pci.bus_id,temperature.gpu,fan.speed,power.draw,power.limit,"
-              "clocks.sm,clocks.mem,memory.total")
+              "clocks.sm,clocks.mem,memory.total,utilization.gpu,memory.used")
     out = run(["nvidia-smi", f"--query-gpu={fields}", "--format=csv,noheader,nounits"])
     gpus = []
     for line in out.strip().splitlines():
         p = [x.strip() for x in line.split(",")]
-        if len(p) < 10:
+        if len(p) < 12:
             continue
         gpus.append({"index": int(p[0]), "name": p[1].replace("NVIDIA ", "").replace("GeForce ", ""),
                      "bus": p[2], "temp": num(p[3]), "fan": num(p[4]), "power": num(p[5]),
                      "pl": num(p[6]), "clock": num(p[7]), "mclock": num(p[8]),
-                     "mem": num(p[9])})
+                     "mem": num(p[9]), "util": num(p[10]), "mem_used": num(p[11])})
     return gpus
 
 
@@ -132,7 +134,7 @@ def sampler():
             point = {"t": snap["t"],
                      "hr": sum(g["hr"] or 0 for g in gpus) if miner else None,
                      "pw": sum(g["power"] or 0 for g in gpus),
-                     "g": {g["bus"]: [g["hr"], g["power"], g["temp"]] for g in gpus}}
+                     "g": {g["bus"]: [g["hr"], g["power"], g["temp"], g["util"]] for g in gpus}}
             with LOCK:
                 LATEST.update(snap)
                 HISTORY.append(point)
@@ -142,9 +144,8 @@ def sampler():
 
 
 def tuner_dirs():
-    dirs = [d for d in sorted(glob.glob(os.path.join(PARENT, "autotune*")))
-            if os.path.isfile(os.path.join(d, "state.json"))]
-    return dirs
+    cands = sorted(set(glob.glob(os.path.join(PARENT, "autotune*")) + [ROOT]))
+    return [d for d in cands if os.path.isfile(os.path.join(d, "state.json"))]
 
 
 def load_json(path):
@@ -172,12 +173,13 @@ def read_tuners():
             "pl_now": levels[min(st.get("pl_i", 0), len(levels) - 1)],
             "pl_i": st.get("pl_i", 0), "in_progress": st.get("in_progress"),
             "waiting": st.get("waiting_power_cycle"), "abort": st.get("abort"),
-            "warmup": cfg.get("warmup"), "sample": cfg.get("sample"),
+            "warmup": cfg.get("warmup"), "first_warmup": cfg.get("first_warmup"),
+            "sample": cfg.get("sample"), "safe_offset": st.get("safe_offset"),
             "results": [{k: r.get(k) for k in keep} for r in st.get("results", [])],
             "levels": st.get("levels", []), "best": load_json(os.path.join(d, "best.json")),
             "offset_max": cfg.get("offset_max")})
     queue = None
-    for d in [BASE] + tuner_dirs():
+    for d in [ROOT] + tuner_dirs():
         q = load_json(os.path.join(d, "queue.json"))
         if q:
             queue = [{"bus": c["bus"], "name": c["name"], "status": c["status"]} for c in q["cards"]]
@@ -213,8 +215,9 @@ def read_log(src, lines):
         return tail(p, lines) if p else "No miner log found under /var/log/miner."
     if src.startswith("tuner:"):
         name = src[6:]
-        if name in [os.path.basename(d) for d in tuner_dirs()]:      # only known folders
-            return tail(os.path.join(PARENT, name, "autotune.log"), lines)
+        for d in tuner_dirs():                                       # only known folders
+            if os.path.basename(d) == name:
+                return tail(os.path.join(d, "autotune.log"), lines)
     return "Unknown log."
 
 
@@ -311,7 +314,7 @@ def main():
     ap.add_argument("--api", default=CFG["api"], help="miner API (OneZeroMiner)")
     a = ap.parse_args()
     CFG["api"] = a.api
-    with open(os.path.join(BASE, "monitor.html"), encoding="utf-8") as f:
+    with open(os.path.join(BASE, "index.html"), encoding="utf-8") as f:
         PAGE = f.read()
     if a.action == "install":
         install(a.port, a.bind)

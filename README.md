@@ -243,34 +243,41 @@ systemctl list-units 'gpu-autotune*' --all --no-pager   # list them
 
 ## Web dashboard
 
-`monitor.py` serves a page from the rig that shows everything in one place, so
-you don't need `tail`, `motd watch` and the miner screen open side by side:
+`autotune.py start` installs and starts a web page on the rig and prints its
+address next to the `tail` command:
+
+```
+Dashboard (live stats, tuning progress, logs):  http://<rig-ip>:8088
+```
+
+Open it from any device on your network. It shows, refreshing every 5 seconds:
 
 - rig hashrate, GPU power and efficiency, with history charts (up to 6 hours)
-- every card: hashrate, power against its limit, clocks, offset, voltage,
-  temperatures and shares
-- each tuning run: what it is testing right now, the queue, the best result at
-  each power limit, and a chart of every test (crashes marked)
+- every card: live trends for hashrate, power, temperature and GPU load, plus
+  power against its limit, clocks, offset, voltage, memory and shares
+- the best settings found for every tuned card, in one table
+- each tuning run: the step it is on (power limit, offset search, clock cap
+  search), a progress bar for the current test, the last few results, the
+  queue, and a chart of every test with crashes marked
 - three live log panes side by side: tuner log, miner output and syslog
 
-```bash
-cd /home/user/autotune
-python3 monitor.py install        # starts now and at every boot
-```
-Then open `http://<rig-ip>:8088` from any device on your network.
+The dashboard lives in the `dashboard/` folder and runs as its own service, so it
+keeps running after tuning ends and starts at every boot.
 
 ```bash
-python3 monitor.py                # run in the terminal instead (Ctrl+C stops it)
-python3 monitor.py install --port 9000
-python3 monitor.py uninstall
+python3 dashboard/monitor.py install              # install or reinstall by hand
+python3 dashboard/monitor.py install --port 9000  # another port
+python3 dashboard/monitor.py uninstall
+python3 dashboard/monitor.py                      # run in the terminal instead
 ```
+`start --no-dashboard` skips it.
 
 The page is read-only: it reads `nvidia-smi`, the miner's local API
-(OneZeroMiner), the `autotune*` folders next to it, the miner log and syslog, and
-changes nothing. It has no login, so anyone on your network can view it. Don't
-forward the port to the internet. Hashrate, shares and voltage need
-OneZeroMiner's API; with other miners the page still shows power, clocks,
-temperatures, tuning and logs.
+(OneZeroMiner), the `autotune*` folders, the miner log and syslog, and changes
+nothing. It has no login, so anyone on your network can view it. Don't forward
+the port to the internet. Hashrate, shares and voltage need OneZeroMiner's API;
+with other miners the page still shows power, clocks, temperatures, tuning and
+logs.
 
 ---
 
@@ -348,7 +355,7 @@ Run `python3 autotune.py start --help` for the full list, and
 | File | Contents |
 |---|---|
 | `autotune.py` | The script |
-| `monitor.py`, `monitor.html` | The web dashboard |
+| `dashboard/` | The web dashboard (`monitor.py`, `index.html`) |
 | `state.json` | The current run: settings, card slot, every result. Used to resume after reboots |
 | `autotune.log` | Everything the tuner did, kept across reboots |
 | `results.csv` | Every test (power limit, offset, cap, hashrate, power, efficiency, clock, temperature, voltage) |
