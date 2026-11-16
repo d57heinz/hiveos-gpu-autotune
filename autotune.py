@@ -51,6 +51,9 @@ prints its address; --no-dashboard skips that.
   stop                      stop tuning, restore starting offset and power limit
   resume                    carry on a stopped run, keeping its results
   rerun                     fresh run on the same card with the same options
+  finetune                  only after a finished run: with the chosen clock cap in
+                            place, raise the offset again, then soak-test the result
+                            for 30 minutes (stepping the offset back if it fails)
   apply [--watch]           apply best.json now (--watch keeps re-applying)
   install-apply             apply best.json automatically at every boot
   uninstall                 remove this folder's services
@@ -553,7 +556,7 @@ def set_pl_paused(gpu, miner, st, watts):
 def run_test(gpu, miner, cfg, st, offset, cap, pl=None):
     warm = cfg.get("first_warmup", cfg["warmup"]) if st.get("fresh", True) else cfg["warmup"]
     st["in_progress"] = {"phase": st["phase"], "offset": offset, "cap": cap, "pl": pl,
-                         "started": time.time(), "warm": warm}
+                         "started": time.time(), "warm": warm, "sample": cfg["sample"]}
     save_state(st)
     label = (f"PL {pl:g} W, " if pl else "") + f"offset {offset:+d}, cap {cap or 'none'}"
     log(f"TEST {label}  ({warm}s warmup + {cfg['sample']}s sample)")
@@ -1000,6 +1003,15 @@ def abort(st, cfg, why):
     except Exception:  # noqa: BLE001
         pass
     release_unit(run_unit(cfg["bus"]))
+    ft = st.get("finetune") or {}
+    if ft.get("stage") == "running":
+        ft.update(stage="done", outcome=f"aborted: {why}")
+        save_state(st)
+        if ft.get("apply_was_on"):
+            try:
+                cmd_install_apply(None)
+            except BaseException:  # noqa: BLE001
+                pass
     queue_advance(cfg, f"aborted: {why}")
 
 
@@ -1182,9 +1194,11 @@ def queue_advance(cfg, outcome):
         return
     try:
         q = load_queue(qpath)
-        for c in q["cards"]:
-            if c["bus"] == cfg["bus"] and c["status"] == "running":
-                c["status"], c["ended"] = outcome, _now()
+        mine = [c for c in q["cards"] if c["bus"] == cfg["bus"] and c["status"] == "running"]
+        if not mine:          # e.g. a fine-tune or a re-run of a card the queue already finished
+            return
+        for c in mine:
+            c["status"], c["ended"] = outcome, _now()
         save_queue(qpath, q)
         if outcome == "finished" and q.get("auto_apply") and os.path.exists(BEST):
             try:
@@ -1383,50 +1397,267 @@ def cmd_run(args):
     if not wait_hashing(miner, 300):
         reboot(st, cfg, "miner never started hashing")
 
+    if st["phase"] in ("refine", "soak"):
+        finetune_loop(st, cfg, gpu, miner)
+        return
     while True:
         params = next_params(st, cfg)
         save_state(st)
         if params is None:
             finish(st, cfg, gpu, miner)
             return
-        off, cap, pl = params
-        if pl and st.get("applied_pl") != pl:
-            try:
-                apply_settings(gpu, level_start(st, cfg), None)   # safe clocks while switching
-                ok = set_pl_paused(gpu, miner, st, pl)
-            except RuntimeError as e:
-                abort(st, cfg, str(e))
-                return
-            except Exception as e:  # noqa: BLE001
-                if needs_reset(e):
-                    reboot(st, cfg, f"driver says the GPU needs a reset ({e})")
-                raise
-            if not ok:
-                recover(gpu, miner, st, cfg)
-                st["applied_pl"] = None
-                continue
-        res = run_test(gpu, miner, cfg, st, off, cap, pl)
-        if res.get("retest"):
-            st["applied_pl"] = None
-            save_state(st)
-            continue
-        if res.get("reboot_needed"):
-            st["in_progress"] = None
-            save_state(st)
-            reboot(st, cfg, "driver says the GPU needs a reset")
-        record(st, res)
-        if res["stable"]:
-            st["reboots"] = 0
-            st["power_cycles"] = 0
-            save_state(st)
-        else:
+        res, gpu = run_step(gpu, miner, cfg, st, *params)
+        if res == "abort":
+            return
+
+
+def run_step(gpu, miner, cfg, st, off, cap, pl, test_cfg=None):
+    """Set the power limit if needed (miner paused), run one test, record it and recover
+    from a failure. Returns (result, gpu); result is None when the test must be redone
+    and "abort" when the run was aborted."""
+    if pl and st.get("applied_pl") != pl:
+        try:
+            apply_settings(gpu, level_start(st, cfg), None)   # safe clocks while switching
+            ok = set_pl_paused(gpu, miner, st, pl)
+        except RuntimeError as e:
+            abort(st, cfg, str(e))
+            return "abort", gpu
+        except Exception as e:  # noqa: BLE001
+            if needs_reset(e):
+                reboot(st, cfg, f"driver says the GPU needs a reset ({e})")
+            raise
+        if not ok:
             recover(gpu, miner, st, cfg)
-            st["applied_pl"] = None          # make sure our PL is back after the restart
-            save_state(st)
-            try:
-                gpu = open_gpu(cfg["bus"], wait=60)
-            except Exception:  # noqa: BLE001
-                reboot(st, cfg, "GPU not available after miner restart")
+            st["applied_pl"] = None
+            return None, gpu
+    res = run_test(gpu, miner, test_cfg or cfg, st, off, cap, pl)
+    if res.get("retest"):
+        st["applied_pl"] = None
+        save_state(st)
+        return None, gpu
+    if res.get("reboot_needed"):
+        st["in_progress"] = None
+        save_state(st)
+        reboot(st, cfg, "driver says the GPU needs a reset")
+    record(st, res)
+    if res["stable"]:
+        st["reboots"] = 0
+        st["power_cycles"] = 0
+        save_state(st)
+    else:
+        recover(gpu, miner, st, cfg)
+        st["applied_pl"] = None          # make sure our PL is back after the restart
+        save_state(st)
+        try:
+            gpu = open_gpu(cfg["bus"], wait=60)
+        except Exception:  # noqa: BLE001
+            reboot(st, cfg, "GPU not available after miner restart")
+    return res, gpu
+
+
+# ---------------------------------------------------------------- fine-tune (after a finished run)
+def ft_results(st, phase):
+    ft = st["finetune"]
+    return [r for r in st["results"][ft["from"]:] if r["phase"] == phase]
+
+
+def ft_next(st, cfg):
+    """Next (offset, cap, pl, sample_secs) of a fine-tune, or None when it is finished.
+    Stage 1 'refine': with the chosen clock cap in place, raise the offset again.
+    Stage 2 'soak':   run the result for a long time; step the offset back if it fails."""
+    ft = st["finetune"]
+    base, step = ft["base"], cfg["offset_step"]
+    if st["phase"] == "refine":
+        done = ft_results(st, "refine")
+        nxt, why = None, None
+        if not done:
+            nxt = base["offset"]                       # baseline at the cap, same test length
+        else:
+            last = done[-1]
+            stable = [r for r in done if r["stable"]]
+            if not last["stable"]:
+                if retry_or_give_up(done, "offset", last["offset"], cfg):
+                    log(f"Retrying offset {last['offset']:+d} once to rule out a fluke crash")
+                    nxt = last["offset"]
+                else:
+                    why = f"offset {last['offset']:+d} keeps crashing"
+            elif stalled(stable, cfg):
+                why = f"no efficiency gain for {cfg['patience']} steps"
+            elif last["offset"] + step > ft["offset_max"]:
+                why = "reached the maximum offset"
+            else:
+                nxt = last["offset"] + step
+        if nxt is not None:
+            return nxt, base["cap"], base["pl"], cfg["sample"]
+        stable = [r for r in done if r["stable"]]
+        fails = {}
+        for r_ in done:
+            if not r_["stable"]:
+                fails[r_["offset"]] = fails.get(r_["offset"], 0) + 1
+        confirmed = [o for o, n in fails.items() if n > cfg["crash_retries"]]
+        limit = min(confirmed) - cfg["margin"] if confirmed else 10 ** 6
+        ok = [r_ for r_ in stable if r_["offset"] not in fails and r_["offset"] <= limit]
+        pick = max(ok, key=lambda r_: r_["eff"]) if ok else None
+        ft["refined"] = pick["offset"] if pick else base["offset"]
+        log(f"Offset refine done ({why}). " + (
+            f"Offset {base['offset']:+d} -> {ft['refined']:+d} at "
+            f"{'cap ' + str(base['cap']) + ' MHz' if base['cap'] else 'no cap'}"
+            if ft["refined"] != base["offset"] else f"Offset stays at {base['offset']:+d}"))
+        st["phase"] = "soak" if ft["soak_secs"] else "done"
+        save_state(st)
+        if st["phase"] == "done":
+            return None
+    # soak
+    start = ft.get("refined", base["offset"])
+    soaks = ft_results(st, "soak")
+    if soaks and soaks[-1]["stable"]:
+        return None
+    fails = sum(1 for r_ in soaks if not r_["stable"])
+    if fails > ft["max_stepbacks"]:
+        ft["failed"] = (f"the setting still failed the soak test after stepping the offset "
+                        f"back {ft['max_stepbacks']} times")
+        return None
+    off = start - fails * step
+    if fails:
+        log(f"Soak test failed at {start - (fails - 1) * step:+d} - stepping back to {off:+d}")
+    return off, base["cap"], base["pl"], ft["soak_secs"]
+
+
+def finetune_loop(st, cfg, gpu, miner):
+    ft = st["finetune"]
+    while True:
+        params = ft_next(st, cfg)
+        save_state(st)
+        if params is None:
+            finetune_finish(st, cfg, gpu, miner)
+            return
+        off, cap, pl, secs = params
+        # a long test sees the odd stale share, so allow more rejects in proportion
+        tcfg = dict(cfg, sample=secs, max_rejects=max(cfg["max_rejects"], secs // 300)) \
+            if secs != cfg["sample"] else cfg
+        if secs != cfg["sample"]:
+            log(f"SOAK TEST: {secs // 60} minutes at offset {off:+d}, "
+                f"{'cap ' + str(cap) + ' MHz' if cap else 'no cap'}")
+        res, gpu = run_step(gpu, miner, cfg, st, off, cap, pl, tcfg)
+        if res == "abort":
+            return
+
+
+def finetune_finish(st, cfg, gpu, miner):
+    ft = st["finetune"]
+    base = ft["base"]
+    soaks = [r_ for r_ in ft_results(st, "soak") if r_["stable"]]
+    refs = [r_ for r_ in ft_results(st, "refine")
+            if r_["stable"] and r_["offset"] == ft.get("refined")]
+    final = soaks[-1] if soaks else (refs[-1] if refs and not ft["soak_secs"] else None)
+    st["phase"] = "done"
+    st["in_progress"] = None
+    ft["stage"] = "done"
+    log("=" * 70)
+    if ft.get("failed") or final is None:
+        ft["outcome"] = ft.get("failed") or "no stable result"
+        log(f"FINE-TUNE FINISHED WITHOUT A NEW RESULT: {ft['outcome']}.")
+        log(f"{BEST} is unchanged. Its setting did not pass a long test on this card, so "
+            f"consider applying a lower offset or a result from another power limit.")
+    else:
+        best = json.load(open(BEST))
+        if not os.path.exists(BEST + ".pre-finetune"):
+            shutil.copy2(BEST, BEST + ".pre-finetune")
+        changed = final["offset"] != base["offset"]
+        best.update(core_offset=final["offset"], clock_cap_mhz=final["cap"],
+                    power_limit_w=final.get("pl"), hashrate=final["hashrate"],
+                    power_w=final["power"], eff=final["eff"],
+                    finetuned={"from_offset": base["offset"], "refined": bool(ft["refine"]),
+                               "soak_minutes": ft["soak_secs"] // 60 if soaks else 0,
+                               "when": _now()})
+        best.pop("selected_by", None)
+        with open(BEST, "w") as f:
+            json.dump(best, f, indent=2)
+        ft["outcome"] = (f"offset {base['offset']:+d} -> {final['offset']:+d}" if changed
+                         else f"offset {final['offset']:+d} confirmed")
+        log("FINE-TUNE FINISHED: " + ft["outcome"]
+            + (f", passed a {ft['soak_secs'] // 60}-minute soak test" if soaks else ""))
+        log(f"Now: offset {final['offset']:+d}, "
+            f"{'cap ' + str(final['cap']) + ' MHz' if final['cap'] else 'no cap'}  ->  "
+            f"{fmt_hr(final['hashrate'])} @ {final['power']} W = {fmt_eff(final['eff'])}"
+            f"   (before: {fmt_eff(base['eff'])})")
+        log(f"Saved to {BEST} (previous result kept as best.json.pre-finetune).")
+    log("=" * 70)
+    save_state(st)
+    write_summary(st, cfg)
+    try:
+        b = json.load(open(BEST))
+        apply_settings(gpu, b["core_offset"], b["clock_cap_mhz"])
+    except Exception as e:  # noqa: BLE001
+        log(f"could not apply the result: {e}")
+    release_unit(run_unit(cfg["bus"]))
+    if ft.get("apply_was_on"):
+        try:
+            cmd_install_apply(None)
+        except BaseException as e:  # noqa: BLE001
+            log(f"could not turn the apply service back on: {e}")
+
+
+def cmd_finetune(a):
+    """Refine and soak-test the result of a FINISHED run in this folder."""
+    if os.geteuid() != 0:
+        sys.exit("Run as root.")
+    st = load_state()
+    if not st or st.get("phase") != "done" or not os.path.exists(BEST):
+        sys.exit("Fine-tuning needs a finished tuning run with a result (best.json) in this "
+                 "folder. Run the normal tune first.")
+    cfg = st["cfg"]
+    best = json.load(open(BEST))
+    if best.get("gpu_bus") != cfg["bus"]:
+        sys.exit("best.json in this folder belongs to a different card.")
+    busy = other_active_run(cfg["bus"])
+    if busy:
+        sys.exit(f"This card already has an active tuning run in {busy}.")
+    refine, soak = not a.no_refine, not a.no_soak
+    if not refine and not soak:
+        sys.exit("Nothing to do: both the refine and the soak test are switched off.")
+    if refine and not best.get("clock_cap_mhz"):
+        log("The result has no clock cap, so the offset search already covered this point - "
+            "skipping the refine step.")
+        refine = False
+        if not soak:
+            sys.exit("Nothing to do.")
+    levels = cfg.get("pl_levels") or [None]
+    pl = best.get("power_limit_w")
+    if pl not in levels:
+        pl = None if levels == [None] else min(levels, key=lambda x: abs(x - (pl or x)))
+    au = apply_unit(cfg["bus"])
+    r_ = sh(["systemctl", "is-enabled", au], timeout=15) if shutil.which("systemctl") else None
+    model_max = model_offset_max(st.get("gpu_name") or "")
+    st["finetune"] = {
+        "from": len(st["results"]), "stage": "running", "refine": refine,
+        "soak_secs": a.soak_mins * 60 if soak else 0, "max_stepbacks": a.max_stepbacks,
+        "offset_max": a.offset_max if a.offset_max is not None else (
+            model_max if model_max is not None else cfg.get("offset_max", 1000)),
+        "apply_was_on": bool(r_ and (r_.stdout or "").strip() == "enabled"),
+        "base": {"offset": best["core_offset"], "cap": best.get("clock_cap_mhz"), "pl": pl,
+                 "eff": best["eff"], "hashrate": best["hashrate"], "power": best["power_w"]}}
+    st["phase"] = "refine" if refine else "soak"
+    st["pl_i"] = levels.index(pl)
+    for k in ("abort", "resume_phase"):
+        st.pop(k, None)
+    st.update(in_progress=None, waiting_power_cycle=None, fresh=True, applied_pl=None, reboots=0)
+    save_state(st)
+    b = st["finetune"]["base"]
+    log(f"FINE-TUNE of {st.get('gpu_name')} at {cfg['bus']}: starting from offset "
+        f"{b['offset']:+d}, {'cap ' + str(b['cap']) + ' MHz' if b['cap'] else 'no cap'}"
+        + (f", {b['pl']:g} W limit" if b["pl"] else "") + ". Steps: "
+        + " then ".join(([f"raise the offset at this cap (up to {st['finetune']['offset_max']:+d})"]
+                         if refine else [])
+                        + ([f"{a.soak_mins}-minute soak test"] if soak else [])))
+    if a.foreground:
+        a.delay = 0
+        cmd_run(a)
+        return
+    launch_run(cfg["bus"])
+    url = dashboard_url()
+    log(f"Started in the background. Follow it with:  tail -f {LOG}"
+        + (f"\nDashboard:  {url}" if url else ""))
 
 
 def ask(prompt, default=None, cast=str, valid=None):
@@ -1803,6 +2034,20 @@ def cmd_stop(_a):
         st["in_progress"] = None
         st.setdefault("abort", "stopped by user")
         save_state(st)
+        ft = st.get("finetune") or {}
+        if ft.get("stage") == "running" and os.path.exists(BEST):
+            # stopping a fine-tune: go back to the saved result, not to stock clocks
+            try:
+                b = json.load(open(BEST))
+                apply_settings(GPU(bus=st["cfg"]["bus"]), b["core_offset"], b["clock_cap_mhz"])
+                log(f"Fine-tune stopped. The card is back on its saved result (offset "
+                    f"{b['core_offset']:+d}, cap {b['clock_cap_mhz'] or 'none'}). "
+                    f"`resume` continues it.")
+                if ft.get("apply_was_on"):
+                    cmd_install_apply(None)
+            except BaseException as e:  # noqa: BLE001
+                log(f"Fine-tune stopped, but could not re-apply the saved result: {e}")
+            return
         try:
             gpu = GPU(bus=st["cfg"]["bus"])
             apply_settings(gpu, st["cfg"]["offset_start"], None)
@@ -2093,6 +2338,15 @@ def main():
     sub.add_parser("stop", help="stop and restore starting settings")
     sub.add_parser("resume", help="carry on a run that was stopped with `stop`")
     sub.add_parser("rerun", help="start a fresh run on the same card with the same options")
+    ftp = sub.add_parser("finetune", help="after a FINISHED run: raise the offset again at the "
+                                          "chosen clock cap, then soak-test the result")
+    ftp.add_argument("--no-refine", action="store_true", help="skip the second offset search")
+    ftp.add_argument("--no-soak", action="store_true", help="skip the long stability test")
+    ftp.add_argument("--soak-mins", type=int, default=30, help="length of the soak test")
+    ftp.add_argument("--max-stepbacks", type=int, default=4,
+                     help="how many times to step the offset back if the soak test fails")
+    ftp.add_argument("--offset-max", type=int, help="highest offset the refine may try")
+    ftp.add_argument("--foreground", action="store_true", help=argparse.SUPPRESS)
     qu = sub.add_parser("queue", help="show the `start --all` queue and each card's result")
     qu.add_argument("--resume", action="store_true", help="start the next pending card")
     ap = sub.add_parser("apply", help="apply best.json")
@@ -2104,7 +2358,7 @@ def main():
     a = p.parse_args()
     {"probe": cmd_probe, "start": cmd_start, "run": cmd_run, "status": cmd_status,
      "report": cmd_report, "queue": cmd_queue,
-     "stop": cmd_stop, "resume": cmd_resume, "rerun": cmd_rerun,
+     "stop": cmd_stop, "resume": cmd_resume, "rerun": cmd_rerun, "finetune": cmd_finetune,
      "apply": cmd_apply, "install-apply": cmd_install_apply,
      "uninstall": cmd_uninstall}[a.cmd](a)
 

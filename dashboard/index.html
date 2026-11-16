@@ -283,7 +283,27 @@ function statusOf(t){
   return ["",`Testing ${ip.pl?ip.pl+" W limit, ":""}offset ${fOff(ip.offset)}, ${ip.cap?"clock cap "+ip.cap+" MHz":"no clock cap"}. ${mm} into the test.`];
 }
 function curPl(t,sel){ if(sel!="now") return sel=="null"?null:+sel; return t.phase=="done"&&t.best&&t.best.power_limit_w?t.best.power_limit_w:t.pl_now; }
+function ftSteps(t){
+  const f=t.finetune, ip=t.in_progress, b=f.base||{}, run=t.phase=="refine"||t.phase=="soak", over=f.stage=="done";
+  const at=`${b.cap?"cap "+b.cap+" MHz":"no cap"}`, items=[["Tuning finished","done"]];
+  if(f.refine) items.push([`Offset refine at ${at}${f.refined!=null?": "+fOff(b.offset)+" to "+fOff(f.refined):""}`, t.phase=="refine"?"now":(t.phase=="soak"||over)?"done":""]);
+  if(f.soak_secs) items.push([`Soak test, ${Math.round(f.soak_secs/60)} min${t.phase=="soak"&&ip?" at offset "+fOff(ip.offset):""}`, t.phase=="soak"?"now":over?"done":""]);
+  items.push([over?"Fine-tune: "+(f.outcome||"finished"):"Result", over?"done":""]);
+  if(!run&&!over) items.forEach(x=>{ if(x[1]=="now") x[1]=""; });
+  return `<ol class="steps" aria-label="Steps of the fine-tune">${items.map(([x,c])=>`<li class="${c}"${c=="now"?' aria-current="step"':""}>${c=="done"?"✓ ":""}${esc(x)}</li>`).join("")}</ol>`;
+}
 function stepsOf(t){
+  if(t.finetune) return ftSteps(t)+testBar(t)+recentOf(t);
+  return stepsMain(t);
+}
+function testBar(t){ const ip=t.in_progress; if(!ip||t.phase=="done"||t.waiting) return "";
+  const warm=ip.warm??t.warmup??30, total=warm+(ip.sample||t.sample||180), age=Math.max(0,Date.now()/1000-ip.started), pct=Math.min(100,age/total*100), left=total-age;
+  const tm=x=>x>=120?Math.ceil(x/60)+" min":Math.ceil(x)+" s";
+  const what=age<warm?`Warming up, ${tm(warm-age)} until sampling starts`:age<total?`${t.phase=="soak"?"Soak test running":"Sampling"}, ${tm(left)} left`:"Finishing this test (waiting for a share or the next step)";
+  return `<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct.toFixed(0)}" aria-label="Progress of the current test"><i style="width:${pct}%"></i><u style="left:${warm/total*100}%"></u></div><div class="sub">${what}. The mark on the bar is where warm-up ends.</div>`; }
+function recentOf(t){ const lastR=t.results.slice(-4).reverse(); if(!lastR.length) return "";
+  return `<ul class="recent">${lastR.map(r=>`<li>${r.phase=="soak"?"soak test, ":r.phase=="refine"?"refine, ":""}${r.pl?r.pl+" W, ":""}offset ${fOff(r.offset)}, ${r.cap?"cap "+r.cap+" MHz":"no cap"}: ${r.stable?`<b>${fHr(r.hashrate)} at ${r.power} W, ${fEff(r.eff)}</b>`:`<b style="color:var(--warn)">failed</b> (${esc(r.reason||"crash")})`}</li>`).join("")}</ul>`; }
+function stepsMain(t){
   const lv=t.levels_all, multi=lv[0]!=null, done=t.phase=="done"&&!t.abort, ip=t.in_progress, here=t.results.filter(r=>(r.pl??null)===(t.pl_now??null));
   const items=[]; if(multi) items.push([`Power limit ${t.pl_now} W (${Math.min(t.pl_i+1,lv.length)} of ${lv.length})`, done?"done":"now"]);
   items.push([`Offset search${t.phase=="offset"&&!done?`, test ${here.filter(r=>r.phase=="offset").length+1}`:""}`, done||t.phase=="cap"?"done":"now"]);
@@ -291,11 +311,7 @@ function stepsOf(t){
   items.push([done?"Finished":"Result", done?"done":""]);
   if(t.abort) items.forEach(x=>{ if(x[1]=="now") x[1]=""; });
   let html=`<ol class="steps" aria-label="Steps of this tuning run">${items.map(([x,c])=>`<li class="${c}"${c=="now"?' aria-current="step"':""}>${c=="done"?"✓ ":""}${esc(x)}</li>`).join("")}</ol>`;
-  if(ip&&!done&&!t.waiting){ const warm=ip.warm??t.warmup??30, total=warm+(t.sample||180), age=Math.max(0,Date.now()/1000-ip.started), pct=Math.min(100,age/total*100);
-    const what=age<warm?`Warming up, ${Math.ceil(warm-age)} s until sampling starts`:age<total?`Sampling, ${Math.ceil(total-age)} s left`:"Finishing this test (waiting for a share or the next step)";
-    html+=`<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct.toFixed(0)}" aria-label="Progress of the current test"><i style="width:${pct}%"></i><u style="left:${warm/total*100}%"></u></div><div class="sub">${what}. The mark on the bar is where warm-up ends.</div>`; }
-  const lastR=t.results.slice(-4).reverse();
-  if(lastR.length) html+=`<ul class="recent">${lastR.map(r=>`<li>${r.pl?r.pl+" W, ":""}offset ${fOff(r.offset)}, ${r.cap?"cap "+r.cap+" MHz":"no cap"}: ${r.stable?`<b>${fHr(r.hashrate)} at ${r.power} W, ${fEff(r.eff)}</b>`:`<b style="color:var(--warn)">failed</b> (${esc(r.reason||"crash")})`}</li>`).join("")}</ul>`;
+  html+=testBar(t)+recentOf(t);
   return html;
 }
 const same=(b,r)=>b&&r&&b.core_offset===r.offset&&(b.clock_cap_mhz??null)===(r.cap??null)&&(b.power_limit_w??null)===(r.pl??null);
@@ -305,7 +321,7 @@ function tuneButtons(t){
   if(!state.controls||t.old) return "";
   const b=(action,label,cls)=>`<button class="${cls||""}" data-tune='${esc(JSON.stringify({dir:t.dir,action,name:t.name}))}'>${label}</button>`;
   if(t.phase!="done") return `<div class="ctl">${b("stop","Stop tuning")}</div>`;
-  return `<div class="ctl">${t.can_resume?b("resume","Resume tuning","go"):""}${b("rerun","Run again with the same options")}</div>`;
+  return `<div class="ctl">${t.can_resume?b("resume","Resume tuning","go"):""}${t.best&&!t.can_resume?b("finetune","Fine-tune this result"):""}${b("rerun","Run again with the same options")}</div>`;
 }
 function renderStart(s){
   if(!s.controls){ dropWidget("start"); return; }
@@ -396,7 +412,8 @@ async function post(path,data){
 $("grid").addEventListener("click",ev=>{
   const u=ev.target.closest("[data-use]"), v=ev.target.closest("[data-svc]"), tn=ev.target.closest("[data-tune]");
   if(tn){ const d=JSON.parse(tn.dataset.tune), q={stop:`Stop tuning ${d.name}?\n\nThe card goes back to its starting offset and power limit. The miner pauses briefly if the power limit has to be restored. You can resume later.`,
-      resume:`Resume tuning ${d.name} from where it stopped?`, rerun:`Start a fresh tuning run on ${d.name} with the same options?\n\nThis pushes the card until it crashes again and can reboot the rig. Its apply service is turned off while it runs.`}[d.action];
+      resume:`Resume tuning ${d.name} from where it stopped?`,
+      finetune:`Fine-tune the result for ${d.name}?\n\nWith its clock cap in place, the offset is raised again until it crashes, then the result runs a 30-minute soak test and is stepped back if it fails. This takes about an hour, can crash the card and reboot the rig, and the apply service is off while it runs.`, rerun:`Start a fresh tuning run on ${d.name} with the same options?\n\nThis pushes the card until it crashes again and can reboot the rig. Its apply service is turned off while it runs.`}[d.action];
     if(confirm(q)){ toast("Working… this can take a minute."); post("/api/tune",{dir:d.dir,action:d.action}); } }
   if(ev.target.id=="st-go"){ const cards=[...document.querySelectorAll("#st-cards input:checked")].map(i=>+i.value), val=id=>$(id).value.trim();
     if(!cards.length){ toast("Choose at least one card first.",true); return; }

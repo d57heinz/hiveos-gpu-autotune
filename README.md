@@ -244,6 +244,45 @@ systemctl list-units 'gpu-autotune*' --all --no-pager   # list them
 
 ---
 
+## Fine-tuning a finished result
+
+Once a card's normal tune has finished, an optional second stage can squeeze out
+a little more and check that the result holds over a longer run. It only works
+on a folder that already has a finished run and a `best.json`.
+
+```bash
+cd /home/user/autotune-01-00-0        # the tuned card's folder
+python3 autotune.py finetune
+```
+or press "Fine-tune this result" on the card's panel in the dashboard.
+
+1. **Offset refine.** With the chosen clock cap in place, the offset is raised
+   again in 15 MHz steps. At the capped clock the card sits at a different point
+   on its voltage curve, so it may tolerate more offset than it did uncapped,
+   and every extra step lowers voltage and power at the same hashrate. The same
+   rules apply: a crash is retried once, the search stops after two crashes or
+   three tests without a gain, and the result stays 30 MHz below a setting that
+   kept crashing. Skipped when the result has no clock cap.
+2. **Soak test.** The result runs for 30 minutes. If it fails, the offset is
+   stepped back 15 MHz and the soak repeats, up to four times.
+
+The new result replaces `best.json` (the previous one is kept as
+`best.json.pre-finetune`), and the card's apply service is turned back on if it
+was on. Expect about an hour, with a crash or two on the way.
+
+| Option | Default | What it does |
+|---|---|---|
+| `--no-refine` | off | Only soak-test the current result |
+| `--no-soak` | off | Only refine the offset |
+| `--soak-mins N` | 30 | Length of the soak test |
+| `--max-stepbacks N` | 4 | How many times to step back after a failed soak |
+| `--offset-max N` | model or run limit | Highest offset the refine may try |
+
+`stop` during a fine-tune puts the card back on its saved result, and `resume`
+continues it.
+
+---
+
 ## Web dashboard
 
 `autotune.py start` installs and starts a web page on the rig and prints its
@@ -279,6 +318,8 @@ your browser; "Reset layout" restores the default.
   power limit.
 - "Resume tuning" carries a stopped run on from where it stopped, keeping its
   results. "Run again with the same options" starts that card over.
+- "Fine-tune this result" on a finished run starts the refine and soak stage
+  described above.
 
 The same actions exist on the command line: `autotune.py stop`, `resume` and
 `rerun`, run in the card's folder.

@@ -211,7 +211,10 @@ def read_tuners():
             "offset_max": cfg.get("offset_max"),
             "apply": applied.get(d, {"unit": None, "enabled": False, "active": False}),
             "custom": os.path.exists(os.path.join(d, "best.auto.json")),
-            "can_resume": bool(st.get("resume_phase")) and st.get("phase") == "done"})
+            "can_resume": bool(st.get("resume_phase")) and st.get("phase") == "done",
+            "finetune": {k: (st.get("finetune") or {}).get(k) for k in
+                         ("stage", "refine", "soak_secs", "outcome", "base", "refined")}
+            if st.get("finetune") else None})
     queue = None
     for d in [ROOT] + tuner_dirs():
         q = load_json(os.path.join(d, "queue.json"))
@@ -271,6 +274,12 @@ def tune_action(name, action):
             raise Refused("This run is still active. Stop it first.")
         ok, out = autotune(d, "rerun", timeout=180)
         msg = "A fresh run with the same options has started. Its earlier results are kept as results.csv.old."
+    elif action == "finetune":
+        if active:
+            raise Refused("A run is active on this card. Fine-tuning needs a finished run.")
+        ok, out = autotune(d, "finetune", timeout=120)
+        msg = ("Fine-tune started: it raises the offset again at the chosen clock cap, then "
+               "runs a 30-minute soak test. It begins in about 20 seconds.")
     else:
         raise Refused("Unknown action.")
     _APPLY_CACHE["t"] = 0
