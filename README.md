@@ -261,21 +261,42 @@ Open it from any device on your network. It shows, refreshing every 5 seconds:
   queue, and a chart of every test with crashes marked
 - three live log panes side by side: tuner log, miner output and syslog
 
+**Arranging the page.** Drag any panel by its title to move it, or use the
+arrow buttons on the panel. The ⤢ button switches a panel between its normal
+width and the full page width, and "Logs full width" does that for the three log
+panels at once (one per row instead of three). The arrangement is remembered in
+your browser; "Reset layout" restores the default.
+
+**Controls for a tuned card.** When a card's tuning has finished, its panel has:
+
+- a switch that turns the card's apply service on or off (whether its settings
+  are applied after every boot and put back if something resets them);
+- a "Use" button next to each power level's best result, with and without a
+  clock cap, which applies that setting to the card right away and makes it the
+  one the apply service keeps. "Back to the tuner's pick" undoes your choice.
+
+Only settings that were tested and never crashed can be applied, and nothing can
+be changed while a run is active on the card. The power limit is still set in
+HiveOS; the page tells you which value matches the setting you chose. Start the
+dashboard with `--read-only` to remove these controls.
+
 The dashboard lives in the `dashboard/` folder and runs as its own service, so it
 keeps running after tuning ends and starts at every boot.
 
 ```bash
 python3 dashboard/monitor.py install              # install or reinstall by hand
 python3 dashboard/monitor.py install --port 9000  # another port
+python3 dashboard/monitor.py install --read-only  # view only, no controls
 python3 dashboard/monitor.py uninstall
 python3 dashboard/monitor.py                      # run in the terminal instead
 ```
 `start --no-dashboard` skips it.
 
-The page is read-only: it reads `nvidia-smi`, the miner's local API
-(OneZeroMiner), the `autotune*` folders, the miner log and syslog, and changes
-nothing. It has no login, so anyone on your network can view it. Don't forward
-the port to the internet. Hashrate, shares and voltage need OneZeroMiner's API;
+Apart from the two controls above, the page only reads: `nvidia-smi`, the
+miner's local API (OneZeroMiner), the `autotune*` folders, the miner log and
+syslog. It has no login, so anyone on your network can view it and use those
+controls. Don't forward the port to the internet. Hashrate, shares and voltage
+need OneZeroMiner's API;
 with other miners the page still shows power, clocks, temperatures, tuning and
 logs.
 

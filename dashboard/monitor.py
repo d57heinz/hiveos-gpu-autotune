@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-monitor.py - a read-only web dashboard for a HiveOS rig running autotune.py.
+monitor.py - a web dashboard for a HiveOS rig running autotune.py.
 
 Shows, on one page that refreshes itself:
   - rig totals (hashrate, power, efficiency) with history charts
@@ -18,10 +18,12 @@ Usage (as root on the rig):
 
 Then open  http://<rig-ip>:8088  from any device on your network.
 
-It only reads: nvidia-smi, the miner's local API (OneZeroMiner), the autotune
-folders next to this script, the miner log and syslog. It changes nothing on
-the rig. There is no login - anyone on your network who can reach the rig can
-see the page, so don't forward the port to the internet.
+It reads nvidia-smi, the miner's local API (OneZeroMiner), the autotune folders,
+the miner log and syslog. For a card whose tuning has finished, the page can also
+(1) turn that card's apply service on or off and (2) apply another tested, stable
+setting from its results. It can do nothing else to the rig; --read-only removes
+those two controls. There is no login - anyone on your network who can reach the
+rig can use the page, so don't forward the port to the internet.
 """
 import argparse
 import collections
@@ -47,7 +49,8 @@ HISTORY = collections.deque(maxlen=6 * 360)          # 6 hours of 10 s samples
 LATEST = {"gpus": [], "miner": None, "sys": {}, "t": 0}
 LOCK = threading.Lock()
 ANSI = re.compile(r"\x1b\[[0-9;?]*[A-Za-z]|\x1b[()][A-Z0-9]|[\x00-\x08\x0b-\x1f]")
-CFG = {"api": "http://127.0.0.1:63005"}
+CFG = {"api": "http://127.0.0.1:63005", "controls": True}
+UNIT_DIR = "/etc/systemd/system"
 
 os.environ["PATH"] = os.environ.get("PATH", "") + ":/hive/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin"
 
@@ -156,8 +159,36 @@ def load_json(path):
         return None
 
 
+def apply_units():
+    """Map tuner folder -> its apply service (by reading which script each unit runs)."""
+    found = {}
+    for path in glob.glob(os.path.join(UNIT_DIR, "gpu-autotune-apply*.service")):
+        try:
+            m = re.search(r"ExecStart=\S+ (\S+) apply", open(path).read())
+        except OSError:
+            continue
+        if m:
+            found[os.path.dirname(os.path.abspath(m.group(1)))] = os.path.basename(path)
+    return found
+
+
+_APPLY_CACHE = {"t": 0, "v": {}}
+
+
+def apply_status():
+    if time.time() - _APPLY_CACHE["t"] > 8:
+        v = {}
+        for d, unit in apply_units().items():
+            v[d] = {"unit": unit,
+                    "enabled": run(["systemctl", "is-enabled", unit]).strip() == "enabled",
+                    "active": run(["systemctl", "is-active", unit]).strip() == "active"}
+        _APPLY_CACHE.update(t=time.time(), v=v)
+    return _APPLY_CACHE["v"]
+
+
 def read_tuners():
     out = []
+    applied = apply_status()
     for d in tuner_dirs():
         st = load_json(os.path.join(d, "state.json"))
         if not st:
@@ -177,14 +208,115 @@ def read_tuners():
             "sample": cfg.get("sample"), "safe_offset": st.get("safe_offset"),
             "results": [{k: r.get(k) for k in keep} for r in st.get("results", [])],
             "levels": st.get("levels", []), "best": load_json(os.path.join(d, "best.json")),
-            "offset_max": cfg.get("offset_max")})
+            "offset_max": cfg.get("offset_max"),
+            "apply": applied.get(d, {"unit": None, "enabled": False, "active": False}),
+            "custom": os.path.exists(os.path.join(d, "best.auto.json"))})
     queue = None
     for d in [ROOT] + tuner_dirs():
         q = load_json(os.path.join(d, "queue.json"))
         if q:
             queue = [{"bus": c["bus"], "name": c["name"], "status": c["status"]} for c in q["cards"]]
             break
-    return {"tuners": out, "queue": queue}
+    return {"tuners": out, "queue": queue, "controls": CFG["controls"]}
+
+
+# ------------------------------------------------------------------ controls
+class Refused(Exception):
+    pass
+
+
+def tuner_dir(name):
+    for d in tuner_dirs():
+        if os.path.basename(d) == name:
+            return d
+    raise Refused("Unknown tuning folder.")
+
+
+def finished_state(d):
+    st = load_json(os.path.join(d, "state.json")) or {}
+    bus = st.get("cfg", {}).get("bus")
+    for other in tuner_dirs():
+        o = load_json(os.path.join(other, "state.json")) or {}
+        if o.get("cfg", {}).get("bus") == bus and o.get("phase") not in (None, "done"):
+            raise Refused("A tuning run is active on this card. Wait until it finishes, "
+                          "or stop it, before changing what is applied.")
+    return st
+
+
+def autotune(d, *args, timeout=90):
+    try:
+        r = subprocess.run([sys.executable, os.path.join(d, "autotune.py"), *args],
+                           capture_output=True, text=True, timeout=timeout,
+                           stdin=subprocess.DEVNULL)
+        return r.returncode == 0, (r.stdout + r.stderr).strip().splitlines()[-1:] or [""]
+    except Exception as e:  # noqa: BLE001
+        return False, [str(e)]
+
+
+def set_apply_service(name, on):
+    d = tuner_dir(name)
+    finished_state(d)
+    if on:
+        if not os.path.exists(os.path.join(d, "best.json")):
+            raise Refused("This run has no result to apply yet.")
+        ok, out = autotune(d, "install-apply")
+        if not ok:
+            raise Refused("Could not turn it on: " + out[0])
+        msg = "On. The settings are applied in about 2 minutes, after every boot, and put back if something resets them."
+    else:
+        unit = apply_units().get(d)
+        if unit:
+            run(["systemctl", "disable", "--now", unit])
+        msg = ("Off. Nothing re-applies the tuned settings now. The card keeps them until the "
+               "miner restarts, HiveOS re-applies its own settings, or the rig reboots.")
+    _APPLY_CACHE["t"] = 0
+    return msg
+
+
+def select_setting(name, body):
+    d = tuner_dir(name)
+    st = finished_state(d)
+    best_path, auto_path = os.path.join(d, "best.json"), os.path.join(d, "best.auto.json")
+    best = load_json(best_path)
+    if not best:
+        raise Refused("This run has no result yet.")
+    if body.get("restore"):
+        if not os.path.exists(auto_path):
+            raise Refused("The tuner's own pick is already in use.")
+        os.replace(auto_path, best_path)
+        what = "the tuner's own pick"
+    else:
+        want = (body.get("pl"), body.get("offset"), body.get("cap"))
+        rows = [r for r in st.get("results", [])
+                if (r.get("pl"), r.get("offset"), r.get("cap")) == want]
+        if not rows or not all(r.get("stable") for r in rows):
+            raise Refused("That setting is not a stable, tested result of this run.")
+        r = rows[-1]
+        if not os.path.exists(auto_path):
+            with open(auto_path, "w") as f:
+                json.dump(best, f, indent=2)
+        best.update(power_limit_w=r.get("pl"), core_offset=r["offset"], clock_cap_mhz=r.get("cap"),
+                    hashrate=r["hashrate"], power_w=r["power"], eff=r["eff"],
+                    selected_by="dashboard")
+        tmp = best_path + ".tmp"
+        with open(tmp, "w") as f:
+            json.dump(best, f, indent=2)
+        os.replace(tmp, best_path)
+        what = (f"offset {r['offset']:+d}, " + (f"clock cap {r['cap']} MHz" if r.get("cap")
+                                               else "no clock cap"))
+    ok, out = autotune(d, "apply")
+    unit = apply_units().get(d)
+    if unit and run(["systemctl", "is-enabled", unit]).strip() == "enabled":
+        run(["systemctl", "restart", unit])
+        keep = "It stays applied after reboots."
+    else:
+        keep = "The apply service is off, so this lasts until the next reboot or settings reset."
+    _APPLY_CACHE["t"] = 0
+    pl = load_json(best_path).get("power_limit_w")
+    note = f" Set the power limit to {pl:g} W in HiveOS to match this result." if pl else ""
+    if not ok:
+        raise Refused(f"Saved {what}, but applying it failed: {out[0]}")
+    return f"Applied {what}. {keep}{note}"
 
 
 def tail(path, lines):
@@ -235,6 +367,36 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
+    def do_POST(self):
+        try:
+            host = self.headers.get("Host", "")
+            origin = self.headers.get("Origin")
+            if (not CFG["controls"] or self.headers.get("X-Rig-Monitor") != "1"
+                    or "application/json" not in self.headers.get("Content-Type", "")
+                    or (origin and urllib.parse.urlparse(origin).netloc != host)):
+                self.send_error(403)
+                return
+            n = int(self.headers.get("Content-Length", "0"))
+            body = json.loads(self.rfile.read(min(n, 4096)) or b"{}")
+            try:
+                if self.path == "/api/apply-service":
+                    msg = set_apply_service(str(body.get("dir")), bool(body.get("on")))
+                elif self.path == "/api/select":
+                    msg = select_setting(str(body.get("dir")), body)
+                else:
+                    self.send_error(404)
+                    return
+                self.send(json.dumps({"ok": True, "message": msg}))
+            except Refused as e:
+                self.send(json.dumps({"ok": False, "message": str(e)}))
+        except (BrokenPipeError, ConnectionResetError):
+            pass
+        except Exception as e:  # noqa: BLE001
+            try:
+                self.send(json.dumps({"ok": False, "message": f"Error: {e}"}))
+            except Exception:  # noqa: BLE001
+                pass
+
     def do_GET(self):
         u = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(u.query)
@@ -283,7 +445,7 @@ Description=GPU autotune rig monitor (web page on port {port})
 After=network-online.target
 
 [Service]
-ExecStart={sys.executable} {os.path.abspath(__file__)} --port {port} --bind {bind} --api {CFG['api']}
+ExecStart={sys.executable} {os.path.abspath(__file__)} --port {port} --bind {bind} --api {CFG['api']}{'' if CFG['controls'] else ' --read-only'}
 Restart=always
 RestartSec=10
 
@@ -312,8 +474,11 @@ def main():
     ap.add_argument("--port", type=int, default=8088)
     ap.add_argument("--bind", default="0.0.0.0", help="address to listen on (default: all)")
     ap.add_argument("--api", default=CFG["api"], help="miner API (OneZeroMiner)")
+    ap.add_argument("--read-only", action="store_true",
+                    help="view only: no buttons that change what is applied to a card")
     a = ap.parse_args()
     CFG["api"] = a.api
+    CFG["controls"] = not a.read_only
     with open(os.path.join(BASE, "index.html"), encoding="utf-8") as f:
         PAGE = f.read()
     if a.action == "install":

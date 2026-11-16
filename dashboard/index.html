@@ -16,32 +16,40 @@
 body{margin:0;background:var(--page);color:var(--text);font:15px/1.45 var(--sans);font-variant-numeric:tabular-nums}
 main{max-width:1500px;margin:0 auto;padding:20px 20px 60px}
 h1{font-size:30px;font-weight:600;margin:0;letter-spacing:.01em}
-h2{font-size:19px;font-weight:600;margin:34px 0 12px}
 h3{font-size:16px;font-weight:600;margin:0}
-.sub{color:var(--muted)}
+h4{font-size:15px;font-weight:600;margin:14px 0 2px}
+.sub{color:var(--muted);font-weight:400}
 .top{display:flex;flex-wrap:wrap;gap:8px 40px;align-items:flex-end;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:16px}
 .totals{display:flex;gap:36px;flex-wrap:wrap}
 .fig b{display:block;font-size:34px;font-weight:600;line-height:1.1}
 .fig span{color:var(--muted)}
+.bar2{display:flex;flex-wrap:wrap;gap:8px 18px;align-items:center;justify-content:space-between;margin:14px 0 16px;color:var(--muted);font-size:14px}
 .notice{margin-top:12px;padding:10px 14px;border-left:3px solid var(--warn);background:var(--panel)}
-.two{display:grid;grid-template-columns:1fr 1fr;gap:16px}
-.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:14px 16px}
-.panel>header{display:flex;justify-content:space-between;align-items:baseline;gap:12px;margin-bottom:6px}
+#grid{display:grid;grid-template-columns:repeat(12,minmax(0,1fr));gap:16px;align-items:start}
+.panel{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 16px 14px;min-width:0}
+.w3{grid-column:span 3}.w4{grid-column:span 4}.w6{grid-column:span 6}.w12,.wide{grid-column:1/-1}
+.panel>header{display:flex;align-items:center;gap:10px;margin-bottom:8px}
+.grab{flex:1;min-width:0;cursor:grab;user-select:none}
+.grab:active{cursor:grabbing}
+.tools{display:flex;gap:4px;opacity:.55}
+.panel:hover .tools,.tools:focus-within{opacity:1}
+.tools button{padding:1px 7px;line-height:1.4}
+.panel.dragging{opacity:.4}
+.panel.over{outline:2px dashed var(--series);outline-offset:2px}
 svg{display:block;width:100%;overflow:visible}
 svg text{fill:var(--muted);font:12px var(--sans)}
 .grid line{stroke:var(--line)}
-.gpus{display:grid;grid-template-columns:repeat(auto-fill,minmax(300px,1fr));gap:16px}
-.gpu dl{display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;margin:10px 0 8px}
-.gpu dt{color:var(--muted);font-size:13px}
-.gpu dd{margin:0;font-size:17px}
-.gpu .big{font-size:26px;font-weight:600}
+.two{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:16px}
+dl{display:grid;grid-template-columns:repeat(auto-fit,minmax(130px,1fr));gap:6px 18px;margin:10px 0 0}
+dt{color:var(--muted);font-size:13px}
+dd{margin:0;font-size:17px}
 .chip{font-size:13px;padding:2px 9px;border-radius:99px;border:1px solid var(--line);color:var(--muted);white-space:nowrap}
 .chip.live{border-color:var(--series);color:var(--text)}
 .chip.bad{border-color:var(--crit);color:var(--text)}
 .chip.ok{border-color:var(--good);color:var(--text)}
 .meter{height:5px;background:var(--line);border-radius:3px;margin-top:5px}
 .meter i{display:block;height:100%;background:var(--series);border-radius:3px}
-.status{font-size:17px;margin:4px 0 12px}
+.status{font-size:17px;margin:2px 0 10px}
 .status.bad{color:var(--warn)}
 table{border-collapse:collapse;width:100%;margin-top:6px}
 th,td{text-align:right;padding:5px 10px;border-bottom:1px solid var(--line);white-space:nowrap}
@@ -50,33 +58,42 @@ th:first-child,td:first-child{text-align:left}
 tr.pick td{background:#1f2c3a}
 .scroll{overflow-x:auto}
 select,button{font:inherit;color:var(--text);background:var(--page);border:1px solid var(--line);border-radius:4px;padding:3px 8px}
+button{cursor:pointer}
+button:hover{border-color:var(--muted)}
 button[aria-pressed=true]{border-color:var(--series)}
-select:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid var(--series);outline-offset:2px}
+button:disabled{opacity:.5;cursor:default}
+select:focus-visible,button:focus-visible,input:focus-visible,pre:focus-visible{outline:2px solid var(--series);outline-offset:2px}
+.switch{display:inline-flex;align-items:center;gap:8px;padding:3px 10px 3px 4px;border-radius:99px}
+.switch i{width:30px;height:16px;border-radius:99px;background:var(--line);position:relative;display:inline-block}
+.switch i::after{content:"";position:absolute;top:2px;left:2px;width:12px;height:12px;border-radius:50%;background:var(--muted)}
+.switch[aria-checked=true] i{background:var(--series)}
+.switch[aria-checked=true] i::after{left:16px;background:#fff}
+.ctl{display:flex;flex-wrap:wrap;gap:8px 16px;align-items:center;margin:6px 0 4px}
 .legend{display:flex;gap:16px;flex-wrap:wrap;color:var(--muted);font-size:13px;margin-top:4px}
 .legend svg{display:inline-block;width:14px;height:14px;vertical-align:-2px;margin-right:4px}
-.logs{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
-.logs>*,.two>*{min-width:0}
-.log pre{margin:0;height:430px;overflow:auto;font:12px/1.4 var(--mono);white-space:pre;color:#cfd9e3;background:var(--page);border:1px solid var(--line);border-radius:4px;padding:8px}
-.log label{color:var(--muted);font-size:13px}
+pre.log{margin:0;height:430px;overflow:auto;font:12px/1.4 var(--mono);white-space:pre;color:#cfd9e3;background:var(--page);border:1px solid var(--line);border-radius:4px;padding:8px}
+.panel label{color:var(--muted);font-size:13px;white-space:nowrap}
 #tip{position:fixed;pointer-events:none;background:#0b1118;border:1px solid var(--line);border-radius:4px;padding:6px 9px;font-size:13px;white-space:pre;display:none;z-index:5}
+#toast{position:fixed;left:50%;bottom:24px;transform:translateX(-50%);max-width:min(720px,92vw);background:#0b1118;border:1px solid var(--series);border-radius:6px;padding:10px 16px;display:none;z-index:6}
+#toast.bad{border-color:var(--warn)}
 .empty{color:var(--muted);padding:6px 0}
 .trend{display:grid;grid-template-columns:88px 1fr 112px;gap:8px;align-items:center;margin-top:4px}
-.trend:first-of-type b{font-size:21px;font-weight:600}
 .trend span{color:var(--muted);font-size:13px}
 .trend b{font-weight:400;text-align:right;white-space:nowrap}
+.trend:first-of-type b{font-size:21px;font-weight:600}
 .steps{display:flex;flex-wrap:wrap;gap:6px 0;margin:2px 0 10px;padding:0;list-style:none}
 .steps li{padding:3px 12px;border:1px solid var(--line);color:var(--muted);font-size:14px}
 .steps li+li{border-left:0}
 .steps li:first-child{border-radius:4px 0 0 4px}.steps li:last-child{border-radius:0 4px 4px 0}
 .steps li.done{color:var(--text)}
 .steps li.now{color:var(--text);border-color:var(--series);box-shadow:inset 0 -2px 0 var(--series)}
-.steps li.now+li{border-left:0}
 .bar{position:relative;height:8px;background:var(--line);border-radius:4px;overflow:hidden;margin:6px 0 2px}
 .bar i{position:absolute;top:0;bottom:0;left:0;background:var(--series)}
 .bar u{position:absolute;top:0;bottom:0;width:2px;background:var(--page)}
 .recent{margin:8px 0 12px;padding:0;list-style:none;color:var(--muted);font-size:14px}
 .recent b{color:var(--text);font-weight:400}
-@media (max-width:1100px){.two,.logs{grid-template-columns:1fr}}
+@media (max-width:1100px){.w3{grid-column:span 6}.w4,.w6{grid-column:1/-1}.two{grid-template-columns:1fr}}
+@media (max-width:700px){.w3{grid-column:1/-1}}
 </style>
 </head>
 <body>
@@ -90,50 +107,75 @@ select:focus-visible,button:focus-visible,input:focus-visible{outline:2px solid 
     </div>
   </div>
   <div id="notice"></div>
-
-  <h2>Rig over time
-    <span style="float:right;font-size:14px;font-weight:400">
-      <button data-range="900">15 min</button> <button data-range="3600" aria-pressed="true">1 hour</button> <button data-range="21600">6 hours</button>
-    </span></h2>
-  <div class="two">
-    <div class="panel"><header><h3>Hashrate</h3><span class="sub" id="c-hr-now"></span></header><svg id="c-hr" height="170"></svg></div>
-    <div class="panel"><header><h3>GPU power</h3><span class="sub" id="c-pw-now"></span></header><svg id="c-pw" height="170"></svg></div>
+  <div class="bar2">
+    <span>Drag a panel by its title to move it. The buttons on each panel move it or switch it between normal and full width.</span>
+    <span>Charts show the last <button data-range="900">15 min</button> <button data-range="3600" aria-pressed="true">1 hour</button> <button data-range="21600">6 hours</button>
+      &nbsp; <button id="logs-wide" aria-pressed="false">Logs full width</button> <button id="reset">Reset layout</button></span>
   </div>
-
-  <h2>Cards</h2>
-  <div class="gpus" id="gpus"></div>
-
-  <h2>Tuning</h2>
-  <div id="bests"></div>
-  <div id="queue"></div>
-  <div id="tuning"><div class="empty">No tuning runs found next to this script.</div></div>
-
-  <h2>Logs</h2>
-  <div class="logs">
-    <div class="panel log"><header><h3>Tuner <select id="log-tuner" aria-label="Tuner log to show"></select></h3><label><input type="checkbox" checked data-follow="tuner"> Follow</label></header><pre id="log-tuner-pre" tabindex="0"></pre></div>
-    <div class="panel log"><header><h3>Miner output</h3><label><input type="checkbox" checked data-follow="miner"> Follow</label></header><pre id="log-miner-pre" tabindex="0"></pre></div>
-    <div class="panel log"><header><h3>Syslog</h3><label><input type="checkbox" checked data-follow="syslog"> Follow</label></header><pre id="log-syslog-pre" tabindex="0"></pre></div>
-  </div>
+  <div id="grid"></div>
 </main>
 <div id="tip"></div>
+<div id="toast" role="status" aria-live="polite"></div>
 <script>
 const $=id=>document.getElementById(id), NS="http://www.w3.org/2000/svg";
 const esc=s=>String(s??"").replace(/[&<>"]/g,c=>({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;"}[c]));
-let hist=[], last=0, range=3600, state=null, pick={};
+let hist=[], last=0, range=3600, state=null, pick={}, dragging=null, busy=false;
 
+// ---------- formatting
 function unit(v,units){ if(v==null||isNaN(v))return "–"; for(const [u,d] of units) if(Math.abs(v)>=d) return (v/d).toFixed(v/d>=100?1:2)+" "+u; return v.toFixed(0)+" "+units.at(-1)[0].slice(1); }
 const fHr=v=>unit(v,[["PH/s",1e15],["TH/s",1e12],["GH/s",1e9],["MH/s",1e6],["kH/s",1e3]]);
 const fEff=v=>unit(v,[["TH/W",1e12],["GH/W",1e9],["MH/W",1e6],["kH/W",1e3]]);
 const fW=v=>v==null?"–":(v>=1000?(v/1000).toFixed(2)+" kW":v.toFixed(0)+" W");
 const fOff=v=>v==null?"–":(v>=0?"+":"")+v;
+const slot=b=>String(b||"").replace(/^0+:/,"");
 function dur(s){ if(s==null)return "–"; s=Math.floor(s); const d=Math.floor(s/86400),h=Math.floor(s%86400/3600),m=Math.floor(s%3600/60); return d?`${d} d ${h} h`:h?`${h} h ${m} min`:`${m} min`; }
 const clock=t=>new Date(t*1000).toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"});
 function el(tag,attrs,parent){ const e=document.createElementNS(NS,tag); for(const k in attrs) e.setAttribute(k,attrs[k]); if(parent)parent.appendChild(e); return e; }
 function tip(ev,text){ const t=$("tip"); if(!text){t.style.display="none";return;} t.textContent=text; t.style.display="block";
-  const x=Math.min(ev.clientX+14, innerWidth-t.offsetWidth-8); t.style.left=x+"px"; t.style.top=(ev.clientY+14)+"px"; }
+  t.style.left=Math.min(ev.clientX+14, innerWidth-t.offsetWidth-8)+"px"; t.style.top=(ev.clientY+14)+"px"; }
+let toastTimer; function toast(msg,bad){ const t=$("toast"); t.textContent=msg; t.className=bad?"bad":""; t.style.display="block"; clearTimeout(toastTimer); toastTimer=setTimeout(()=>t.style.display="none",9000); }
 function niceMax(v){ if(!(v>0))return 1; const p=Math.pow(10,Math.floor(Math.log10(v))); for(const m of [1,1.5,2,3,4,5,7.5,10]) if(m*p>=v) return m*p; return 10*p; }
 
-// ---- line chart: one series, zero-based y, crosshair + tooltip
+// ---------- layout: panels in one grid; order and width are remembered in this browser
+const RANK=id=>id.startsWith("chart")?0:id.startsWith("gpu:")?1:id=="bests"?2:id=="queue"?3:id.startsWith("tuner:")?4:5;
+const SPAN=id=>id.startsWith("chart")?6:id.startsWith("gpu:")?3:id.startsWith("log-")?4:12;
+let layout={order:[],wide:{}}; try{ layout=Object.assign(layout,JSON.parse(localStorage.getItem("rigmon-layout")||"{}")); }catch(e){}
+function saveLayout(){ layout.order=[...$("grid").children].map(w=>w.dataset.id); try{ localStorage.setItem("rigmon-layout",JSON.stringify(layout)); }catch(e){} }
+function redraw(){ if(state){ renderCharts(); renderTuning(state,true); } }
+function setWide(w,on){ w.classList.toggle("wide",on); const b=w.querySelector("[data-act=wide]"); b.setAttribute("aria-pressed",on); b.title=on?"Back to normal width":"Make full width"; }
+function widget(id,title){
+  let w=document.querySelector(`#grid>[data-id="${CSS.escape(id)}"]`);
+  if(w) return w;
+  w=document.createElement("section"); w.className="panel w"+SPAN(id); w.dataset.id=id;
+  w.innerHTML=`<header><h3 class="grab" title="Drag to move"></h3><span class="extra"></span><span class="tools"><button data-act="up" title="Move earlier" aria-label="Move earlier">◀</button><button data-act="down" title="Move later" aria-label="Move later">▶</button><button data-act="wide" aria-label="Full width">⤢</button></span></header><div class="body"></div>`;
+  w.querySelector("h3").textContent=title||"";
+  setWide(w,!!layout.wide[id]);
+  w.querySelector(".tools").onclick=ev=>{ const a=ev.target.dataset.act; if(!a) return;
+    if(a=="wide"){ const on=!w.classList.contains("wide"); layout.wide[id]=on; setWide(w,on); }
+    if(a=="up"&&w.previousElementSibling) w.parentNode.insertBefore(w,w.previousElementSibling);
+    if(a=="down"&&w.nextElementSibling) w.parentNode.insertBefore(w.nextElementSibling,w);
+    saveLayout(); syncLogsBtn(); redraw(); };
+  const grab=w.querySelector(".grab");
+  grab.onmousedown=()=>w.draggable=true; grab.onmouseup=()=>w.draggable=false;
+  w.ondragstart=ev=>{ dragging=w; w.classList.add("dragging"); ev.dataTransfer.effectAllowed="move"; ev.dataTransfer.setData("text/plain",id); };
+  w.ondragend=()=>{ w.draggable=false; w.classList.remove("dragging"); document.querySelectorAll(".over").forEach(x=>x.classList.remove("over")); dragging=null; saveLayout(); redraw(); };
+  w.ondragover=ev=>{ if(!dragging||dragging===w) return; ev.preventDefault(); w.classList.add("over"); };
+  w.ondragleave=()=>w.classList.remove("over");
+  w.ondrop=ev=>{ ev.preventDefault(); w.classList.remove("over"); if(!dragging||dragging===w) return;
+    const r=w.getBoundingClientRect(), after=(ev.clientX-r.left)/r.width>.5; w.parentNode.insertBefore(dragging, after?w.nextSibling:w); };
+  // place it: saved position if known, otherwise by its default group
+  const key=x=>{ const i=layout.order.indexOf(x); return i>=0?[0,i]:[1,RANK(x)]; }, k=key(id);
+  const before=[...$("grid").children].find(c=>{ const o=key(c.dataset.id); return o[0]>k[0]||(o[0]==k[0]&&o[1]>k[1]); });
+  $("grid").insertBefore(w,before||null);
+  return w;
+}
+function dropWidget(id){ const w=document.querySelector(`#grid>[data-id="${CSS.escape(id)}"]`); if(w) w.remove(); }
+const body=w=>w.querySelector(".body"), extra=w=>w.querySelector(".extra");
+function syncLogsBtn(){ const ws=[...document.querySelectorAll('#grid>[data-id^="log-"]')]; $("logs-wide").setAttribute("aria-pressed",ws.length>0&&ws.every(w=>w.classList.contains("wide"))); }
+$("logs-wide").onclick=()=>{ const ws=[...document.querySelectorAll('#grid>[data-id^="log-"]')], on=!ws.every(w=>w.classList.contains("wide")); ws.forEach(w=>{ layout.wide[w.dataset.id]=on; setWide(w,on); }); saveLayout(); syncLogsBtn(); };
+$("reset").onclick=()=>{ try{ localStorage.removeItem("rigmon-layout"); }catch(e){} location.reload(); };
+
+// ---------- charts
 function lineChart(svg, pts, fmt){
   svg.textContent=""; const W=svg.clientWidth||600,H=+svg.getAttribute("height"),L=8,R=8,T=10,B=22;
   svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
@@ -141,8 +183,8 @@ function lineChart(svg, pts, fmt){
   const t0=pts[0][0],t1=pts.at(-1)[0], ymax=niceMax(Math.max(...pts.map(p=>p[1])));
   const X=t=>L+(t-t0)/(t1-t0||1)*(W-L-R), Y=v=>T+(1-v/ymax)*(H-T-B);
   const g=el("g",{class:"grid"},svg);
-  for(const f of [0,.5,1]){ el("line",{x1:L,x2:W-R,y1:Y(ymax*f),y2:Y(ymax*f)},g); const tx=el("text",{x:L+2,y:Y(ymax*f)-4},svg); tx.textContent=f?fmt(ymax*f):""; }
-  for(const f of [0,.5,1]){ const tx=el("text",{x:L+f*(W-L-R),y:H-5,"text-anchor":f==0?"start":f==1?"end":"middle"},svg); tx.textContent=clock(t0+f*(t1-t0)); }
+  for(const f of [0,.5,1]){ el("line",{x1:L,x2:W-R,y1:Y(ymax*f),y2:Y(ymax*f)},g); el("text",{x:L+2,y:Y(ymax*f)-4},svg).textContent=f?fmt(ymax*f):""; }
+  for(const f of [0,.5,1]) el("text",{x:L+f*(W-L-R),y:H-5,"text-anchor":f==0?"start":f==1?"end":"middle"},svg).textContent=clock(t0+f*(t1-t0));
   let d=""; pts.forEach((p,i)=>{ const gap=i&&p[0]-pts[i-1][0]>60; d+=(i&&!gap?"L":"M")+X(p[0]).toFixed(1)+" "+Y(p[1]).toFixed(1); });
   el("path",{d,fill:"none",stroke:"var(--series)","stroke-width":2,"stroke-linejoin":"round"},svg);
   const cross=el("line",{y1:T,y2:H-B,stroke:"var(--muted)","stroke-dasharray":"3 3",visibility:"hidden"},svg);
@@ -160,8 +202,6 @@ function spark(pts,label,lo,hi){ const W=260,H=26; if(pts.length<2) return `<svg
   const d=pts.map((p,i)=>(i?"L":"M")+((p[0]-t0)/(t1-t0||1)*W).toFixed(1)+" "+(2+(1-Math.min(1,Math.max(0,(p[1]-lo)/(hi-lo||1))))*(H-4)).toFixed(1)).join("");
   return `<svg viewBox="0 0 ${W} ${H}" height="${H}" preserveAspectRatio="none" role="img" aria-label="${label} over the last hour"><path d="${d}" fill="none" stroke="var(--series)" stroke-width="1.5" vector-effect="non-scaling-stroke"/></svg>`; }
 function trend(label,pts,now,lo,hi){ return `<div class="trend"><span>${label}</span>${spark(pts,label,lo,hi)}<b>${now}</b></div>`; }
-
-// ---- scatter of tests: x = offset or clock cap, y = efficiency; crashes are crosses on the baseline
 function testChart(svg, rows, xkey, xfmt, best, color){
   svg.textContent=""; const W=svg.clientWidth||500,H=+svg.getAttribute("height"),L=8,R=14,T=12,B=24;
   svg.setAttribute("viewBox",`0 0 ${W} ${H}`);
@@ -173,8 +213,7 @@ function testChart(svg, rows, xkey, xfmt, best, color){
   const g=el("g",{class:"grid"},svg);
   for(const f of [0,.5,1]){ const y=Y(lo+f*(hi-lo)); el("line",{x1:L,x2:W-R,y1:y,y2:y},g); el("text",{x:L+2,y:y-4},svg).textContent=fEff(lo+f*(hi-lo)); }
   el("line",{x1:L,x2:W-R,y1:H-B,y2:H-B},g);
-  const ticks=x1==x0?[x0]:[x0,(x0+x1)/2,x1];
-  ticks.forEach((v,i)=>{ el("text",{x:X(v),y:H-6,"text-anchor":"middle"},svg).textContent=xfmt(Math.round(v)); });
+  (x1==x0?[x0]:[x0,(x0+x1)/2,x1]).forEach(v=>{ el("text",{x:X(v),y:H-6,"text-anchor":"middle"},svg).textContent=xfmt(Math.round(v)); });
   const sorted=[...ok].sort((a,b)=>a[xkey]-b[xkey]);
   if(sorted.length>1) el("path",{d:sorted.map((r,i)=>(i?"L":"M")+X(r[xkey])+" "+Y(r.eff)).join(""),fill:"none",stroke:color,"stroke-width":1.5,opacity:.45},svg);
   for(const r of rows){
@@ -190,6 +229,7 @@ function testChart(svg, rows, xkey, xfmt, best, color){
   }
 }
 
+// ---------- panels
 function renderTop(s){
   $("host").textContent=s.sys.host||"Rig monitor"; document.title=(s.sys.host||"Rig")+" monitor";
   const hr=s.miner?s.gpus.reduce((a,g)=>a+(g.hr||0),0):null, pw=s.gpus.reduce((a,g)=>a+(g.power||0),0);
@@ -201,17 +241,20 @@ function renderTop(s){
 }
 function renderCharts(){
   const cut=Date.now()/1000-range, h=hist.filter(p=>p.t>=cut);
-  const a=h.filter(p=>p.hr!=null).map(p=>[p.t,p.hr]), b=h.map(p=>[p.t,p.pw]);
-  lineChart($("c-hr"),a,fHr); lineChart($("c-pw"),b,fW);
-  $("c-hr-now").textContent=a.length?"now "+fHr(a.at(-1)[1]):""; $("c-pw-now").textContent=b.length?"now "+fW(b.at(-1)[1]):"";
+  for(const [id,title,pts,fmt] of [["chart-hr","Rig hashrate",h.filter(p=>p.hr!=null).map(p=>[p.t,p.hr]),fHr],["chart-pw","Rig GPU power",h.map(p=>[p.t,p.pw]),fW]]){
+    const w=widget(id,title); if(!body(w).firstChild) body(w).innerHTML='<svg height="170"></svg>';
+    lineChart(body(w).firstChild,pts,fmt); extra(w).innerHTML=`<span class="sub">${pts.length?"now "+fmt(pts.at(-1)[1]):""}</span>`; }
 }
 function renderGpus(s){
-  const cut=Date.now()/1000-3600, tun={}; for(const t of s.tuners) tun[t.bus]=t;
-  $("gpus").innerHTML=s.gpus.map(g=>{
+  const cut=Date.now()/1000-3600, tun={}; for(const t of s.tuners) if(!tun[t.bus]||t.phase!="done") tun[t.bus]=t;
+  const seen=new Set();
+  for(const g of s.gpus){
+    const id="gpu:"+g.bus; seen.add(id); const w=widget(id,`GPU ${g.index}: ${g.name}`);
     const t=tun[g.bus], hh=hist.filter(p=>p.t>=cut&&p.g[g.bus]), col=i=>hh.filter(p=>p.g[g.bus][i]!=null).map(p=>[p.t,p.g[g.bus][i]]);
     let chip=""; if(t){ if(t.waiting) chip='<span class="chip bad">⚠ needs power cycle</span>'; else if(t.phase!="done") chip='<span class="chip live">● tuning now</span>'; else if(t.best) chip='<span class="chip ok">✓ tuned</span>'; }
+    extra(w).innerHTML=chip;
     const hot=g.temp>=78, pct=g.pl?Math.min(100,g.power/g.pl*100):0;
-    return `<div class="panel gpu"><header><div><h3>GPU ${g.index}: ${esc(g.name)}</h3><span class="sub">slot ${esc(g.bus.replace(/^0+:/,""))}</span></div>${chip}</header>
+    body(w).innerHTML=`<div class="sub">slot ${esc(slot(g.bus))}</div>
       ${trend("Hashrate",col(0),fHr(g.hr))}${trend("Power",col(1),g.power!=null?g.power.toFixed(0)+" W":"–")}${trend("Temperature",col(2),(g.temp??"–")+" °C",20,95)}${trend("GPU load",col(3),g.util!=null?g.util.toFixed(0)+" %":"–",0,100)}
       <dl><div><dt>Power, of ${g.pl?g.pl.toFixed(0):"–"} W limit</dt><dd>${g.power!=null?g.power.toFixed(0):"–"} W<div class="meter"><i style="width:${pct}%"></i></div></dd></div>
       <div><dt>Efficiency</dt><dd>${g.hr&&g.power?fEff(g.hr/g.power):"–"}</dd></div>
@@ -220,9 +263,10 @@ function renderGpus(s){
       <div><dt>Temperature${g.mtemp?", memory":""}</dt><dd>${hot?"⚠ ":""}${g.temp??"–"} °C${g.mtemp?", "+g.mtemp+" °C":""}${hot?" (hot)":""}</dd></div>
       <div><dt>Core voltage</dt><dd>${g.volt?Math.round(g.volt)+" mV":"–"}</dd></div>
       <div><dt>Shares accepted</dt><dd>${g.acc??"–"}</dd></div>
-      <div><dt>Rejected, invalid</dt><dd>${g.rej??"–"}, ${g.inv??"–"}</dd></div></dl></div>`; }).join("")||'<div class="empty">No cards detected.</div>';
+      <div><dt>Rejected, invalid</dt><dd>${g.rej??"–"}, ${g.inv??"–"}</dd></div></dl>`;
+  }
+  document.querySelectorAll('#grid>[data-id^="gpu:"]').forEach(w=>{ if(!seen.has(w.dataset.id)) w.remove(); });
 }
-function curPl(t,sel){ if(sel!="now") return sel=="null"?null:+sel; return t.phase=="done"&&t.best&&t.best.power_limit_w?t.best.power_limit_w:t.pl_now; }
 function statusOf(t){
   if(t.waiting) return ["bad","⚠ Waiting for a cold power cycle: "+t.waiting+". Switch the rig off at the PSU for 10 seconds, then power on."];
   if(t.abort) return ["bad","Stopped: "+t.abort];
@@ -231,6 +275,7 @@ function statusOf(t){
   const age=Math.max(0,Date.now()/1000-ip.started), mm=Math.floor(age/60)+":"+String(Math.floor(age%60)).padStart(2,"0");
   return ["",`Testing ${ip.pl?ip.pl+" W limit, ":""}offset ${fOff(ip.offset)}, ${ip.cap?"clock cap "+ip.cap+" MHz":"no clock cap"}. ${mm} into the test.`];
 }
+function curPl(t,sel){ if(sel!="now") return sel=="null"?null:+sel; return t.phase=="done"&&t.best&&t.best.power_limit_w?t.best.power_limit_w:t.pl_now; }
 function stepsOf(t){
   const lv=t.levels_all, multi=lv[0]!=null, done=t.phase=="done", ip=t.in_progress, here=t.results.filter(r=>(r.pl??null)===(t.pl_now??null));
   const items=[]; if(multi) items.push([`Power limit ${t.pl_now} W (${Math.min(t.pl_i+1,lv.length)} of ${lv.length})`, done?"done":"now"]);
@@ -241,54 +286,99 @@ function stepsOf(t){
   if(ip&&!done&&!t.waiting){ const warm=ip.warm??t.warmup??30, total=warm+(t.sample||180), age=Math.max(0,Date.now()/1000-ip.started), pct=Math.min(100,age/total*100);
     const what=age<warm?`Warming up, ${Math.ceil(warm-age)} s until sampling starts`:age<total?`Sampling, ${Math.ceil(total-age)} s left`:"Finishing this test (waiting for a share or the next step)";
     html+=`<div class="bar" role="progressbar" aria-valuemin="0" aria-valuemax="100" aria-valuenow="${pct.toFixed(0)}" aria-label="Progress of the current test"><i style="width:${pct}%"></i><u style="left:${warm/total*100}%"></u></div><div class="sub">${what}. The mark on the bar is where warm-up ends.</div>`; }
-  const last=t.results.slice(-4).reverse();
-  if(last.length) html+=`<ul class="recent">${last.map(r=>`<li>${r.pl?r.pl+" W, ":""}offset ${fOff(r.offset)}, ${r.cap?"cap "+r.cap+" MHz":"no cap"}: ${r.stable?`<b>${fHr(r.hashrate)} at ${r.power} W, ${fEff(r.eff)}</b>`:`<b style="color:var(--warn)">failed</b> (${esc(r.reason||"crash")})`}</li>`).join("")}</ul>`;
+  const lastR=t.results.slice(-4).reverse();
+  if(lastR.length) html+=`<ul class="recent">${lastR.map(r=>`<li>${r.pl?r.pl+" W, ":""}offset ${fOff(r.offset)}, ${r.cap?"cap "+r.cap+" MHz":"no cap"}: ${r.stable?`<b>${fHr(r.hashrate)} at ${r.power} W, ${fEff(r.eff)}</b>`:`<b style="color:var(--warn)">failed</b> (${esc(r.reason||"crash")})`}</li>`).join("")}</ul>`;
   return html;
 }
+const same=(b,r)=>b&&r&&b.core_offset===r.offset&&(b.clock_cap_mhz??null)===(r.cap??null)&&(b.power_limit_w??null)===(r.pl??null);
+function useBtn(t,r){ if(!state.controls||t.phase!="done"||!t.best||!r) return "";
+  return same(t.best,r)?' <span class="chip ok">✓ applied</span>':` <button data-use='${esc(JSON.stringify({dir:t.dir,pl:r.pl??null,offset:r.offset,cap:r.cap??null}))}' title="Apply this setting to the card now">Use</button>`; }
+function controlsOf(t){
+  if(!state.controls||!t.best) return "";
+  const b=t.best, cur=`${b.power_limit_w?b.power_limit_w+" W limit, ":""}offset ${fOff(b.core_offset)}, ${b.clock_cap_mhz?"clock cap "+b.clock_cap_mhz+" MHz":"no clock cap"}`;
+  if(t.phase!="done") return "";
+  const on=t.apply.enabled;
+  return `<h4>Settings applied to this card</h4><div class="ctl"><span>${esc(cur)} <span class="sub">(${t.custom?"chosen by you":"the tuner's pick"}; ${fHr(b.hashrate)} at ${b.power_w} W, ${fEff(b.eff)})</span></span>
+    <button class="switch" role="switch" aria-checked="${on}" data-svc='${esc(JSON.stringify({dir:t.dir,on:!on}))}'><i></i>Keep applied after reboots: ${on?"on":"off"}</button>
+    ${t.custom?`<button data-use='${esc(JSON.stringify({dir:t.dir,restore:true}))}'>Back to the tuner's pick</button>`:""}</div>
+    <div class="sub">Pick another tested setting with a “Use” button in the table. The power limit itself is set in HiveOS.${on&&!t.apply.active?" The apply service is enabled but not running right now.":""}</div>`;
+}
 function renderBests(s){
-  const rows=s.tuners.filter(t=>t.best).map(t=>{ const b=t.best,h=b.hiveos_only||{}; return `<tr><td>${esc(t.name)}</td><td>${esc((t.bus||"").replace(/^0+:/,""))}</td><td>${b.power_limit_w?b.power_limit_w+" W":"as set"}</td><td>${fOff(b.core_offset)}</td><td>${b.clock_cap_mhz?b.clock_cap_mhz+" MHz":"none"}</td><td>${fHr(b.hashrate)}</td><td>${b.power_w} W</td><td>${fEff(b.eff)}</td><td>${h.core_offset!=null?`${h.power_limit_w?h.power_limit_w+" W, ":""}${fOff(h.core_offset)}: ${fHr(h.hashrate)}, ${fEff(h.eff)}`:"–"}</td></tr>`; }).join("");
-  const pending=s.tuners.filter(t=>!t.best).length;
-  $("bests").innerHTML=rows?`<div class="panel" style="margin-bottom:16px"><header><h3>Best settings found</h3><span class="sub">${pending?pending+" card"+(pending>1?"s":"")+" still without a result":"all tuned cards"}</span></header><div class="scroll"><table><tr><th>Card</th><th>Slot</th><th>Power limit</th><th>Core offset</th><th>Clock cap</th><th>Hashrate</th><th>Power</th><th>Efficiency</th><th>Best without a cap</th></tr>${rows}</table></div></div>`:"";
+  const rows=s.tuners.filter(t=>t.best).map(t=>{ const b=t.best,h=b.hiveos_only||{}; return `<tr><td>${esc(t.name)}</td><td>${esc(slot(t.bus))}</td><td>${b.power_limit_w?b.power_limit_w+" W":"as set"}</td><td>${fOff(b.core_offset)}</td><td>${b.clock_cap_mhz?b.clock_cap_mhz+" MHz":"none"}</td><td>${fHr(b.hashrate)}</td><td>${b.power_w} W</td><td>${fEff(b.eff)}</td><td>${t.apply.enabled?"on":"off"}</td><td>${h.core_offset!=null?`${h.power_limit_w?h.power_limit_w+" W, ":""}${fOff(h.core_offset)}: ${fHr(h.hashrate)}, ${fEff(h.eff)}`:"–"}</td></tr>`; }).join("");
+  if(!rows){ dropWidget("bests"); return; }
+  const pending=s.tuners.filter(t=>!t.best).length, w=widget("bests","Settings in use for each tuned card");
+  extra(w).innerHTML=`<span class="sub">${pending?pending+" card"+(pending>1?"s":"")+" still without a result":""}</span>`;
+  body(w).innerHTML=`<div class="scroll"><table><tr><th>Card</th><th>Slot</th><th>Power limit</th><th>Core offset</th><th>Clock cap</th><th>Hashrate</th><th>Power</th><th>Efficiency</th><th>Kept applied</th><th>Tuner's best without a cap</th></tr>${rows}</table></div>`;
 }
-function renderTuning(s){
+function renderTuning(s,force){
   renderBests(s);
-  $("queue").innerHTML=s.queue?`<div class="panel" style="margin-bottom:16px"><h3>Queue</h3><div class="scroll"><table><tr><th>Card</th><th>Slot</th><th>Status</th></tr>${s.queue.map(c=>`<tr><td>${esc(c.name.replace("NVIDIA GeForce ",""))}</td><td>${esc(c.bus.replace(/^0+:/,""))}</td><td>${esc(c.status)}</td></tr>`).join("")}</table></div></div>`:"";
-  if(document.activeElement&&document.activeElement.closest&&document.activeElement.closest("#tuning")) return;   // don't rebuild under an open menu
-  if(!s.tuners.length){ $("tuning").innerHTML='<div class="empty">No tuning runs found next to this script. Start one with <code>python3 autotune.py start</code>.</div>'; return; }
-  $("tuning").innerHTML=s.tuners.map((t,i)=>{
+  if(s.queue){ body(widget("queue","Tuning queue")).innerHTML=`<div class="scroll"><table><tr><th>Card</th><th>Slot</th><th>Status</th></tr>${s.queue.map(c=>`<tr><td>${esc(c.name.replace("NVIDIA GeForce ",""))}</td><td>${esc(slot(c.bus))}</td><td>${esc(c.status)}</td></tr>`).join("")}</table></div>`; } else dropWidget("queue");
+  const seen=new Set();
+  s.tuners.forEach(t=>{
+    const id="tuner:"+t.dir; seen.add(id); const w=widget(id,`Tuning: ${t.name}`);
+    if(!force&&w.contains(document.activeElement)&&document.activeElement.tagName=="SELECT") return;   // don't rebuild under an open menu
     const [cls,msg]=statusOf(t), lv=t.levels_all, sel=pick[t.dir]??"now", cur=curPl(t,sel);
-    const opts=lv[0]==null?"":`<label class="sub">Power limit shown <select data-dir="${esc(t.dir)}"><option value="now"${sel=="now"?" selected":""}>${t.phase=="done"&&t.best&&t.best.power_limit_w?"best":"current"} (${curPl(t,"now")} W)</option>${lv.map(p=>`<option value="${p}"${String(p)==sel?" selected":""}>${p} W</option>`).join("")}</select></label>`;
-    const rows=t.levels.map(l=>{ const b=l.best,n=l.no_cap; return b?`<tr class="${l.pl===cur?"pick":""}"><td>${l.pl??"current"}${l.pl?" W":""}</td><td>${fOff(b.offset)}</td><td>${b.cap??"none"}</td><td>${fHr(b.hashrate)}</td><td>${b.power} W</td><td>${fEff(b.eff)}</td><td>${fHr(n.hashrate)}</td><td>${n.power} W</td><td>${fEff(n.eff)}</td></tr>`:`<tr><td>${l.pl??""} W</td><td colspan="8" style="text-align:left">no stable result (${esc(l.note||"")})</td></tr>`; }).join("");
-    const b=t.best, bestLine=b?`<p>Best overall: ${b.power_limit_w?b.power_limit_w+" W limit, ":""}offset ${fOff(b.core_offset)}${b.clock_cap_mhz?", clock cap "+b.clock_cap_mhz+" MHz":""}. ${fHr(b.hashrate)} at ${b.power_w} W, ${fEff(b.eff)}.</p>`:"";
-    return `<div class="panel" style="margin-bottom:16px"><header><div><h3>${esc(t.name)} <span class="sub">slot ${esc((t.bus||"").replace(/^0+:/,""))}, folder ${esc(t.dir)}</span></h3></div>${opts}</header>
-      <div class="status ${cls}">${esc(msg)}</div>${stepsOf(t)}${bestLine}
-      <div class="two"><div><h3>Offset search</h3><svg id="so${i}" height="210" role="img" aria-label="Efficiency by core offset"></svg></div>
-      <div><h3>Clock cap search</h3><svg id="sc${i}" height="210" role="img" aria-label="Efficiency by clock cap"></svg></div></div>
+    extra(w).innerHTML=`<span class="sub">slot ${esc(slot(t.bus))}, folder ${esc(t.dir)}</span>`+(lv[0]==null?"":` <label>Power limit shown <select data-dir="${esc(t.dir)}"><option value="now"${sel=="now"?" selected":""}>${t.phase=="done"&&t.best&&t.best.power_limit_w?"applied":"current"} (${curPl(t,"now")} W)</option>${lv.map(p=>`<option value="${p}"${String(p)==sel?" selected":""}>${p} W</option>`).join("")}</select></label>`);
+    const rows=t.levels.map(l=>{ const b=l.best,n=l.no_cap; return b?`<tr class="${l.pl===cur?"pick":""}"><td>${l.pl??"current"}${l.pl?" W":""}</td><td>${fOff(b.offset)}</td><td>${b.cap??"none"}</td><td>${fHr(b.hashrate)}</td><td>${b.power} W</td><td>${fEff(b.eff)}${useBtn(t,b)}</td><td>${fOff(n.offset)}</td><td>${fHr(n.hashrate)}</td><td>${n.power} W</td><td>${fEff(n.eff)}${b.cap?useBtn(t,n):""}</td></tr>`:`<tr><td>${l.pl??""} W</td><td colspan="9" style="text-align:left">no stable result (${esc(l.note||"")})</td></tr>`; }).join("");
+    body(w).innerHTML=`<div class="status ${cls}">${esc(msg)}</div>${stepsOf(t)}${controlsOf(t)}
+      <div class="two"><div><h4>Offset search</h4><svg class="so" height="210" role="img" aria-label="Efficiency by core offset"></svg></div>
+      <div><h4>Clock cap search</h4><svg class="sc" height="210" role="img" aria-label="Efficiency by clock cap"></svg></div></div>
       <div class="legend"><span><svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="4.5" fill="var(--series)"/></svg>stable test, offset search</span><span><svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="4.5" fill="var(--series2)"/></svg>stable test, cap search</span><span><svg viewBox="0 0 14 14"><path d="M3 3L11 11M11 3L3 11" stroke="var(--crit)" stroke-width="2.5"/></svg>failed test</span><span><svg viewBox="0 0 14 14"><circle cx="7" cy="7" r="5.5" fill="none" stroke="var(--text)" stroke-width="1.5"/></svg>best at this power limit</span></div>
-      ${rows?`<div class="scroll"><table><tr><th>Power limit</th><th>Offset</th><th>Clock cap</th><th>Hashrate</th><th>Power</th><th>Efficiency</th><th>Uncapped hashrate</th><th>Power</th><th>Efficiency</th></tr>${rows}</table></div>`:""}</div>`; }).join("");
-  s.tuners.forEach((t,i)=>{ const sel=pick[t.dir]??"now", cur=curPl(t,sel);
+      ${rows?`<h4>Best at each power limit</h4><div class="scroll"><table><tr><th>Power limit</th><th>Offset</th><th>Clock cap</th><th>Hashrate</th><th>Power</th><th>Efficiency</th><th>Without a cap: offset</th><th>Hashrate</th><th>Power</th><th>Efficiency</th></tr>${rows}</table></div>`:""}`;
     const rs=t.results.filter(r=>(r.pl??null)===(cur??null)), lvl=t.levels.find(l=>(l.pl??null)===(cur??null)), best=lvl&&lvl.best;
-    testChart($("so"+i),rs.filter(r=>r.phase=="offset"),"offset",v=>fOff(v),best&&!best.cap?best:null,"var(--series)");
-    testChart($("sc"+i),rs.filter(r=>r.phase=="cap"&&r.cap),"cap",v=>v+" MHz",best&&best.cap?best:null,"var(--series2)"); });
-  document.querySelectorAll("#tuning select").forEach(x=>x.onchange=()=>{ pick[x.dataset.dir]=x.value; x.blur(); renderTuning(state); });
-  const lt=$("log-tuner"), want=s.tuners.map(t=>t.dir).join("|");
-  if(lt.dataset.have!==want){ const keep=lt.value, live=s.tuners.find(t=>t.phase!="done"); lt.innerHTML=s.tuners.map(t=>`<option>${esc(t.dir)}</option>`).join(""); lt.dataset.have=want; lt.value=s.tuners.some(t=>t.dir==keep)?keep:(live||s.tuners[0]).dir; }
+    testChart(w.querySelector(".so"),rs.filter(r=>r.phase=="offset"),"offset",v=>fOff(v),best&&!best.cap?best:null,"var(--series)");
+    testChart(w.querySelector(".sc"),rs.filter(r=>r.phase=="cap"&&r.cap),"cap",v=>v+" MHz",best&&best.cap?best:null,"var(--series2)");
+    const sl=extra(w).querySelector("select"); if(sl) sl.onchange=()=>{ pick[t.dir]=sl.value; sl.blur(); renderTuning(state,true); };
+  });
+  document.querySelectorAll('#grid>[data-id^="tuner:"]').forEach(w=>{ if(!seen.has(w.dataset.id)) w.remove(); });
+  // log panels
+  const lt=logWidget("log-tuner","Tuner log"), sel=lt.querySelector("select"), want=s.tuners.map(t=>t.dir).join("|");
+  if(sel.dataset.have!==want){ const keep=sel.value, live=s.tuners.find(t=>t.phase!="done"); sel.innerHTML=s.tuners.map(t=>`<option>${esc(t.dir)}</option>`).join(""); sel.dataset.have=want; if(s.tuners.length) sel.value=s.tuners.some(t=>t.dir==keep)?keep:(live||s.tuners[0]).dir; }
+  logWidget("log-miner","Miner output"); logWidget("log-syslog","Syslog"); syncLogsBtn();
 }
+function logWidget(id,title){
+  const w=widget(id,title); if(body(w).firstChild) return w;
+  extra(w).innerHTML=(id=="log-tuner"?'<select aria-label="Tuner log to show"></select> ':"")+'<label><input type="checkbox" checked> Follow</label>';
+  body(w).innerHTML='<pre class="log" tabindex="0"></pre>';
+  const sel=w.querySelector("select"); if(sel) sel.onchange=logs;
+  return w;
+}
+
+// ---------- actions (only for cards whose tuning has finished)
+async function post(path,data){
+  if(busy) return; busy=true;
+  try{ const r=await fetch(path,{method:"POST",headers:{"Content-Type":"application/json","X-Rig-Monitor":"1"},body:JSON.stringify(data)});
+    if(!r.ok) throw new Error(r.status==403?"The rig refused this (controls are off in read-only mode).":"The rig answered with error "+r.status+".");
+    const j=await r.json(); toast(j.message,!j.ok); }
+  catch(e){ toast(e.message||"Could not reach the rig.",true); }
+  busy=false; poll();
+}
+$("grid").addEventListener("click",ev=>{
+  const u=ev.target.closest("[data-use]"), v=ev.target.closest("[data-svc]");
+  if(u){ const d=JSON.parse(u.dataset.use), what=d.restore?"the tuner's own pick":`offset ${fOff(d.offset)}, ${d.cap?"clock cap "+d.cap+" MHz":"no clock cap"}${d.pl?" (tested at a "+d.pl+" W limit)":""}`;
+    if(confirm(`Apply ${what} to the card now?\n\nThe card's clocks change right away while it is mining.`)){ toast("Applying…"); post("/api/select",d); } }
+  if(v){ const d=JSON.parse(v.dataset.svc);
+    if(confirm(d.on?"Turn on the apply service for this card?\n\nIts settings will be applied after every boot and put back if something resets them.":"Turn off the apply service for this card?\n\nNothing will re-apply the tuned settings after a miner restart or reboot.")){ toast("Working…"); post("/api/apply-service",d); } }
+});
+
+// ---------- polling
 async function poll(){
   try{ const s=await (await fetch("/api/state?since="+last)).json(); state=s;
     hist=hist.concat(s.history); if(hist.length) last=hist.at(-1).t; const cut=Date.now()/1000-21700; hist=hist.filter(p=>p.t>=cut);
-    renderTop(s); renderCharts(); renderGpus(s); renderTuning(s);
+    renderTop(s); if(dragging) return; renderCharts(); renderGpus(s); renderTuning(s);
   }catch(e){ $("meta").textContent="Cannot reach the rig monitor. It will keep trying."; }
 }
 async function logs(){
-  for(const [name,src] of [["tuner",$("log-tuner").value?"tuner:"+$("log-tuner").value:""],["miner","miner"],["syslog","syslog"]]){
-    const pre=$("log-"+name+"-pre"); if(!src){ pre.textContent="No tuning run yet."; continue; }
+  for(const id of ["log-tuner","log-miner","log-syslog"]){
+    const w=document.querySelector(`#grid>[data-id="${id}"]`); if(!w) continue;
+    const pre=w.querySelector("pre"), sel=w.querySelector("select"), src=id=="log-tuner"?(sel&&sel.value?"tuner:"+sel.value:""):id.slice(4);
+    if(!src){ pre.textContent="No tuning run yet."; continue; }
     try{ const text=await (await fetch("/api/log?n=400&src="+encodeURIComponent(src))).text();
-      const follow=document.querySelector(`[data-follow=${name}]`).checked; pre.textContent=text; if(follow) pre.scrollTop=pre.scrollHeight; }catch(e){}
+      pre.textContent=text; if(w.querySelector("input").checked) pre.scrollTop=pre.scrollHeight; }catch(e){}
   }
 }
 document.querySelectorAll("[data-range]").forEach(b=>b.onclick=()=>{ range=+b.dataset.range; document.querySelectorAll("[data-range]").forEach(x=>x.setAttribute("aria-pressed",x===b)); renderCharts(); });
-$("log-tuner").onchange=logs; addEventListener("resize",()=>{ if(state){ renderCharts(); renderTuning(state);} });
+addEventListener("resize",redraw);
 poll().then(logs); setInterval(poll,5000); setInterval(logs,5000);
 </script>
 </body>
