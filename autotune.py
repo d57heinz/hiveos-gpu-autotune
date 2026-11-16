@@ -166,6 +166,32 @@ def run_unit(bus):
     return f"gpu-autotune-{_slug(bus)}.service"
 
 
+def unit_script(unit):
+    """Path of the autotune.py a service file runs, or None."""
+    try:
+        m = re.search(r"ExecStart=\S+ (\S+) ", open(os.path.join(UNIT_DIR, unit)).read())
+    except OSError:
+        return None
+    return os.path.abspath(m.group(1)) if m else None
+
+
+def own_unit(unit):
+    """True if the service belongs to THIS folder. The service name comes from the card's
+    slot, so another folder tuning the same card shares it and must not be stopped by us."""
+    other = unit_script(unit)
+    return other is None or other == SCRIPT
+
+
+def release_unit(unit, stop=False):
+    if not own_unit(unit):
+        log(f"{unit} belongs to another folder ({os.path.dirname(unit_script(unit))}) - "
+            f"leaving it alone")
+        return
+    if stop:
+        systemctl("stop", unit)
+    systemctl("disable", unit)
+
+
 def apply_unit(bus):
     return f"gpu-autotune-apply-{_slug(bus)}.service"
 SCRIPT = os.path.abspath(__file__)
@@ -971,7 +997,7 @@ def abort(st, cfg, why):
         restore_pl(gpu, st, cfg)
     except Exception:  # noqa: BLE001
         pass
-    systemctl("disable", run_unit(cfg["bus"]))
+    release_unit(run_unit(cfg["bus"]))
     queue_advance(cfg, f"aborted: {why}")
 
 
@@ -1074,7 +1100,7 @@ def finish(st, cfg, gpu=None, miner=None):
         except RuntimeError as e:
             log(f"Could not set the power limit: {e}. Set {best['pl']:g} W in HiveOS.")
     apply_settings(gpu, best["offset"], best["cap"])
-    systemctl("disable", run_unit(cfg["bus"]))
+    release_unit(run_unit(cfg["bus"]))
 
     def desc(r):
         return ((f"PL {r['pl']:g} W, " if r.get("pl") else "") + f"core offset {r['offset']:+d}"
@@ -1302,7 +1328,7 @@ def cmd_run(args):
     if not st or st.get("phase") == "done":
         log("Nothing to do (no active run).")
         if st:
-            systemctl("disable", run_unit(st["cfg"]["bus"]))
+            release_unit(run_unit(st["cfg"]["bus"]))
         return
     cfg = st["cfg"]
     gpu = open_gpu(cfg["bus"])
@@ -1489,6 +1515,18 @@ def cmd_start(a):
     else:
         sys.exit("Use --gpu N or --bus 0000xxxx:yy:00.0 (or run in a terminal for prompts).")
     log(f"Selected GPU {gpu.index}: {gpu.name} at {gpu.bus}")
+
+    # one active run per card: another folder may already be tuning this card
+    other = unit_script(run_unit(gpu.bus))
+    if other and other != SCRIPT:
+        ost = None
+        try:
+            ost = json.load(open(os.path.join(os.path.dirname(other), "state.json")))
+        except (OSError, ValueError):
+            pass
+        if ost and ost.get("phase") not in (None, "done"):
+            sys.exit(f"This card already has an active tuning run in {os.path.dirname(other)}. "
+                     f"Stop it first:\n  cd {os.path.dirname(other)} && python3 autotune.py stop")
 
     # one folder per card: this folder's best.json may be another card's saved result
     # (and its apply service reads it from here) - a new run would rename it away
@@ -1756,8 +1794,7 @@ def cmd_stop(_a):
             print("This card was part of a queue. The remaining cards are NOT started; "
                   "continue them with `autotune.py queue --resume`.")
     if st:
-        systemctl("stop", run_unit(st["cfg"]["bus"]))
-        systemctl("disable", run_unit(st["cfg"]["bus"]))
+        release_unit(run_unit(st["cfg"]["bus"]), stop=True)
         st["phase"] = "done"
         st["in_progress"] = None
         st.setdefault("abort", "stopped by user")
