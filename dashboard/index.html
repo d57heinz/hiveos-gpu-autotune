@@ -320,7 +320,7 @@ function renderStart(s){
     <button class="go" id="st-go">Start tuning</button></div>`;
   const busyBus=new Set(s.tuners.filter(t=>t.phase!="done").map(t=>t.bus)), sig=s.gpus.map(g=>g.index+g.bus+busyBus.has(g.bus)).join("|"), box=$("st-cards");
   if(box.dataset.sig!==sig){ const was=new Set([...box.querySelectorAll("input:checked")].map(i=>i.value));
-    box.innerHTML=s.gpus.map(g=>`<label><input type="checkbox" value="${g.index}"${was.has(String(g.index))&&!busyBus.has(g.bus)?" checked":""}${busyBus.has(g.bus)?" disabled":""}> GPU ${g.index}: ${esc(g.name)}${busyBus.has(g.bus)?" (tuning now)":""}</label>`).join("")||'<span class="sub">No cards detected.</span>'; box.dataset.sig=sig; }
+    box.innerHTML=s.gpus.map(g=>`<label><input type="checkbox" value="${g.index}"${was.has(String(g.index))&&!busyBus.has(g.bus)?" checked":""}${busyBus.has(g.bus)?" disabled":""}> GPU ${g.index}: ${esc(g.name)}${busyBus.has(g.bus)?' <span class="sub">(tuning now. Press “Stop tuning” on its panel first)</span>':""}</label>`).join("")||'<span class="sub">No cards detected.</span>'; box.dataset.sig=sig; }
 }
 function controlsOf(t){
   if(!state.controls||!t.best) return "";
