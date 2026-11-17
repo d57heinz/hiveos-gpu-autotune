@@ -404,12 +404,69 @@ def open_gpu(bus, wait=300):
             time.sleep(15)
 
 
+RAMP_STEP = 45      # MHz: a large offset is approached in steps, never in one jump
+
+
+def ramp_offset(gpu, offset):
+    """Raise the offset gradually. The search itself moves 15 MHz at a time; jumping a few
+    hundred MHz at once under load is a much harder transient for the card."""
+    try:
+        cur = gpu.get_offset()
+    except Exception:  # noqa: BLE001
+        cur = offset
+    while offset - cur > RAMP_STEP:
+        cur += RAMP_STEP
+        gpu.set_offset(cur)
+        time.sleep(2)
+    gpu.set_offset(offset)
+
+
 def apply_settings(gpu, offset, cap):
     """Only the two tuned values. Power limit and memory lock are left to HiveOS:
-    changing them live under load triggered an Xid 62 (PMU halt) on a 5070 Ti."""
-    gpu.set_offset(offset)
-    time.sleep(2)
-    gpu.set_cap(cap)
+    changing them live under load triggered an Xid 62 (PMU halt) on a 5070 Ti.
+    Order matters: with a clock cap, the cap goes on FIRST so the card never runs the
+    full clock at an offset that was only tested with the cap in place."""
+    if cap is not None:
+        gpu.set_cap(cap)
+        time.sleep(2)
+        ramp_offset(gpu, offset)
+        return
+    try:
+        lower = offset <= gpu.get_offset()
+    except Exception:  # noqa: BLE001
+        lower = True
+    if lower:                       # going down: drop the offset before releasing the cap
+        gpu.set_offset(offset)
+        time.sleep(2)
+        gpu.set_cap(None)
+    else:                           # going up without a cap: release it, then step up
+        gpu.set_cap(None)
+        time.sleep(2)
+        ramp_offset(gpu, offset)
+
+
+def diagnose(short_bus):
+    """Log why the miner might not be hashing: the miner's last lines and recent GPU errors."""
+    try:
+        files = glob.glob("/var/log/miner/**/*.log", recursive=True)
+        if files:
+            path = max(files, key=os.path.getmtime)
+            with open(path, "rb") as f:
+                f.seek(0, 2)
+                f.seek(max(0, f.tell() - 6000))
+                lines = re.sub(r"\x1b\[[0-9;]*m", "", f.read().decode("utf-8", "replace")).splitlines()
+            keep = [l.strip() for l in lines if l.strip() and "====" not in l and "----" not in l][-8:]
+            for l in keep:
+                log(f"    miner: {l[:170]}")
+        r = sh(["dmesg", "-T"], timeout=15)
+        xid = [l for l in (r.stdout if r else "").splitlines()
+               if ("Xid" in l or "RESET_REQUIRED" in l) and (short_bus in l or "RESET_REQUIRED" in l)][-3:]
+        for l in xid:
+            log(f"    kernel: {l[:170]}")
+        if not xid:
+            log("    kernel: no Xid or reset-required message for this card")
+    except Exception as e:  # noqa: BLE001
+        log(f"    (could not collect diagnostics: {e})")
 
 
 def enforce(gpu, offset, cap):
@@ -549,6 +606,7 @@ def set_pl_paused(gpu, miner, st, watts):
     if wait_hashing(miner, 150):
         return True
     log("  miner is not hashing 150 s after `miner start` - trying `miner restart`")
+    diagnose(gpu.short_bus)
     hive_miner("restart")
     return wait_hashing(miner, 240)
 
@@ -907,6 +965,7 @@ def recover(gpu, miner, st, cfg):
     if wait_hashing(miner, 240):
         log("  miner is hashing again")
         return
+    diagnose(gpu.short_bus)
     reboot(st, cfg, "miner did not recover")
 
 
@@ -1420,7 +1479,8 @@ def run_step(gpu, miner, cfg, st, off, cap, pl, test_cfg=None):
     and "abort" when the run was aborted."""
     if pl and st.get("applied_pl") != pl:
         try:
-            apply_settings(gpu, level_start(st, cfg), None)   # safe clocks while switching
+            # known-safe clocks while the miner restarts; the first test steps up from here
+            apply_settings(gpu, min(cfg["offset_start"], level_start(st, cfg)), None)
             ok = set_pl_paused(gpu, miner, st, pl)
         except RuntimeError as e:
             abort(st, cfg, str(e))
@@ -1430,8 +1490,15 @@ def run_step(gpu, miner, cfg, st, off, cap, pl, test_cfg=None):
                 reboot(st, cfg, f"driver says the GPU needs a reset ({e})")
             raise
         if not ok:
-            recover(gpu, miner, st, cfg)
+            # don't walk into the same wall after the reboot: start this level lower next time
+            cur = level_start(st, cfg)
+            if st.get("phase") == "offset" and cur > cfg["offset_start"]:
+                st["level_offset_start"] = max(cfg["offset_start"], cur - 4 * cfg["offset_step"])
+                log(f"  this power level will start its offset search at "
+                    f"{st['level_offset_start']:+d} instead of {cur:+d}")
             st["applied_pl"] = None
+            save_state(st)
+            recover(gpu, miner, st, cfg)
             return None, gpu
     res = run_test(gpu, miner, test_cfg or cfg, st, off, cap, pl)
     if res.get("retest"):
