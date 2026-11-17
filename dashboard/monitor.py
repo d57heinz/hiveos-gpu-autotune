@@ -250,7 +250,25 @@ def finished_state(d):
     return st
 
 
+def sync_script(d):
+    """Card folders hold their own copy of autotune.py, which `git pull` in the main folder
+    does not update. Bring it up to date, but never under a run that is still active."""
+    src, dst = os.path.join(ROOT, "autotune.py"), os.path.join(d, "autotune.py")
+    try:
+        if os.path.abspath(src) == os.path.abspath(dst) or not os.path.exists(src):
+            return
+        st = load_json(os.path.join(d, "state.json")) or {}
+        if st.get("phase") not in (None, "done"):
+            return
+        if not os.path.exists(dst) or open(src, "rb").read() != open(dst, "rb").read():
+            import shutil
+            shutil.copy2(src, dst)
+    except OSError:
+        pass
+
+
 def autotune(d, *args, timeout=90):
+    sync_script(d)
     try:
         r = subprocess.run([sys.executable, os.path.join(d, "autotune.py"), *args],
                            capture_output=True, text=True, timeout=timeout,

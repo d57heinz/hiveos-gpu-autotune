@@ -233,6 +233,13 @@ python3 autotune.py resume      # continue the stopped run, keeping its results
 python3 autotune.py rerun       # or start this card over with the same options
 python3 autotune.py conclude    # or close it and keep the best result so far
 ```
+Each card folder has its own copy of `autotune.py`. After a `git pull` in the main
+folder, copy it across before using a new command in a card folder (the
+dashboard's buttons do this for you):
+```bash
+cp /home/user/autotune/autotune.py /home/user/autotune-01-00-0/
+```
+
 `resume` and `conclude` also work on a run that aborted by itself, for example
 after "more than 3 reboots in a row". `conclude` needs at least one completed
 power level.
