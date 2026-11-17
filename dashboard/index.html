@@ -321,7 +321,7 @@ function tuneButtons(t){
   if(!state.controls||t.old) return "";
   const b=(action,label,cls)=>`<button class="${cls||""}" data-tune='${esc(JSON.stringify({dir:t.dir,action,name:t.name}))}'>${label}</button>`;
   if(t.phase!="done") return `<div class="ctl">${b("stop","Stop tuning")}</div>`;
-  return `<div class="ctl">${t.can_resume?b("resume","Resume tuning","go"):""}${t.best&&!t.can_resume?b("finetune","Fine-tune this result"):""}${b("rerun","Run again with the same options")}</div>`;
+  return `<div class="ctl">${t.can_resume?b("resume","Resume tuning","go"):""}${t.can_conclude?b("conclude","Finish with the results so far"):""}${t.best&&!t.can_resume?b("finetune","Fine-tune this result"):""}${b("rerun","Run again with the same options")}</div>`;
 }
 function renderStart(s){
   if(!s.controls){ dropWidget("start"); return; }
@@ -413,6 +413,7 @@ $("grid").addEventListener("click",ev=>{
   const u=ev.target.closest("[data-use]"), v=ev.target.closest("[data-svc]"), tn=ev.target.closest("[data-tune]");
   if(tn){ const d=JSON.parse(tn.dataset.tune), q={stop:`Stop tuning ${d.name}?\n\nThe card goes back to its starting offset and power limit. The miner pauses briefly if the power limit has to be restored. You can resume later.`,
       resume:`Resume tuning ${d.name} from where it stopped?`,
+      conclude:`Close this run for ${d.name} and keep the best result of the power levels it completed?\n\nThat result is applied to the card now.`,
       finetune:`Fine-tune the result for ${d.name}?\n\nWith its clock cap in place, the offset is raised again until it crashes, then the result runs a 30-minute soak test and is stepped back if it fails. This takes about an hour, can crash the card and reboot the rig, and the apply service is off while it runs.`, rerun:`Start a fresh tuning run on ${d.name} with the same options?\n\nThis pushes the card until it crashes again and can reboot the rig. Its apply service is turned off while it runs.`}[d.action];
     if(confirm(q)){ toast("Working… this can take a minute."); post("/api/tune",{dir:d.dir,action:d.action}); } }
   if(ev.target.id=="st-go"){ const cards=[...document.querySelectorAll("#st-cards input:checked")].map(i=>+i.value), val=id=>$(id).value.trim();

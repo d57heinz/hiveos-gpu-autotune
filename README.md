@@ -231,7 +231,11 @@ later:
 python3 autotune.py stop
 python3 autotune.py resume      # continue the stopped run, keeping its results
 python3 autotune.py rerun       # or start this card over with the same options
+python3 autotune.py conclude    # or close it and keep the best result so far
 ```
+`resume` and `conclude` also work on a run that aborted by itself, for example
+after "more than 3 reboots in a row". `conclude` needs at least one completed
+power level.
 
 To re-tune a card later (e.g. with a different power-limit range), stop the card's
 apply service first so it doesn't keep re-applying the old result. `start` offers

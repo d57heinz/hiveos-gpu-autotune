@@ -211,7 +211,10 @@ def read_tuners():
             "offset_max": cfg.get("offset_max"),
             "apply": applied.get(d, {"unit": None, "enabled": False, "active": False}),
             "custom": os.path.exists(os.path.join(d, "best.auto.json")),
-            "can_resume": bool(st.get("resume_phase")) and st.get("phase") == "done",
+            "can_resume": st.get("phase") == "done" and (bool(st.get("resume_phase")) or (
+                bool(st.get("abort")) and len(st.get("levels", [])) < len(levels))),
+            "can_conclude": st.get("phase") == "done" and bool(st.get("abort"))
+            and any(lv.get("best") for lv in st.get("levels", [])),
             "finetune": {k: (st.get("finetune") or {}).get(k) for k in
                          ("stage", "refine", "soak_secs", "outcome", "base", "refined")}
             if st.get("finetune") else None})
@@ -274,6 +277,9 @@ def tune_action(name, action):
             raise Refused("This run is still active. Stop it first.")
         ok, out = autotune(d, "rerun", timeout=180)
         msg = "A fresh run with the same options has started. Its earlier results are kept as results.csv.old."
+    elif action == "conclude":
+        ok, out = autotune(d, "conclude", timeout=180)
+        msg = "Done. The run is closed with the best result of the power levels it completed, and that result is applied."
     elif action == "finetune":
         if active:
             raise Refused("A run is active on this card. Fine-tuning needs a finished run.")

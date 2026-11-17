@@ -51,6 +51,7 @@ prints its address; --no-dashboard skips that.
   stop                      stop tuning, restore starting offset and power limit
   resume                    carry on a stopped run, keeping its results
   rerun                     fresh run on the same card with the same options
+  conclude                  end a stopped/aborted run, keeping its best result so far
   finetune                  only after a finished run: with the chosen clock cap in
                             place, raise the offset again, then soak-test the result
                             for 30 minutes (stepping the offset back if it fails)
@@ -993,6 +994,8 @@ def restore_pl(gpu, st, cfg):
 def abort(st, cfg, why):
     log(f"ABORTED: {why}")
     st["abort"] = why
+    if st.get("phase") not in (None, "done"):
+        st["resume_phase"] = st["phase"]          # `resume` can carry on from here
     st["phase"] = "done"
     save_state(st)
     write_summary(st, cfg)
@@ -2093,6 +2096,10 @@ def cmd_resume(_a):
     if os.geteuid() != 0:
         sys.exit("Run as root.")
     st = load_state()
+    if st and st.get("phase") == "done" and not st.get("resume_phase") and st.get("abort") \
+            and len(st.get("levels", [])) < len(st["cfg"].get("pl_levels") or [None]):
+        # aborted by an older version, which did not record where it was: work it out
+        st["resume_phase"] = "cap" if st.get("safe_offset") is not None else "offset"
     if not st or not st.get("resume_phase") or st.get("phase") != "done":
         sys.exit("There is no stopped run to resume in this folder.")
     bus = st["cfg"]["bus"]
@@ -2112,6 +2119,24 @@ def cmd_resume(_a):
         save_queue(qp, q)
     launch_run(bus)
     log(f"Resumed the stopped run on {bus}; it continues from where it stopped.")
+
+
+def cmd_conclude(_a):
+    """End a stopped or aborted run now and keep the best result of the power levels it
+    completed, exactly as if the run had finished there."""
+    if os.geteuid() != 0:
+        sys.exit("Run as root.")
+    st = load_state()
+    if not st or st.get("phase") != "done":
+        sys.exit("Stop the run first (`autotune.py stop`), then conclude it.")
+    if not any(lv.get("best") for lv in st.get("levels", [])):
+        sys.exit("This run has not completed a power level yet, so there is no result to keep. "
+                 "Use `resume` or `rerun`.")
+    for k in ("abort", "resume_phase"):
+        st.pop(k, None)
+    save_state(st)
+    log("Concluding the run with the power levels completed so far.")
+    finish(st, st["cfg"])
 
 
 def cmd_rerun(_a):
@@ -2338,6 +2363,7 @@ def main():
     sub.add_parser("stop", help="stop and restore starting settings")
     sub.add_parser("resume", help="carry on a run that was stopped with `stop`")
     sub.add_parser("rerun", help="start a fresh run on the same card with the same options")
+    sub.add_parser("conclude", help="end a stopped/aborted run and keep its best result so far")
     ftp = sub.add_parser("finetune", help="after a FINISHED run: raise the offset again at the "
                                           "chosen clock cap, then soak-test the result")
     ftp.add_argument("--no-refine", action="store_true", help="skip the second offset search")
@@ -2359,6 +2385,7 @@ def main():
     {"probe": cmd_probe, "start": cmd_start, "run": cmd_run, "status": cmd_status,
      "report": cmd_report, "queue": cmd_queue,
      "stop": cmd_stop, "resume": cmd_resume, "rerun": cmd_rerun, "finetune": cmd_finetune,
+     "conclude": cmd_conclude,
      "apply": cmd_apply, "install-apply": cmd_install_apply,
      "uninstall": cmd_uninstall}[a.cmd](a)
 
